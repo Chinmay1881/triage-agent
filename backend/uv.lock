@@ -1141,6 +1141,7 @@ dependencies = [
     { name = "pymongo" },
     { name = "pyyaml" },
     { name = "sse-starlette" },
+    { name = "stix2" },
     { name = "uvicorn" },
 ]
 
@@ -1165,6 +1166,7 @@ requires-dist = [
     { name = "pymongo", specifier = ">=4.19.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sse-starlette", specifier = ">=3.6.0" },
+    { name = "stix2", specifier = ">=3.0.2" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 

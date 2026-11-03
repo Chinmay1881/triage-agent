@@ -12,6 +12,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set in .env}
       MONGO_TELEMETRY_READER_PASSWORD: ${MONGO_TELEMETRY_READER_PASSWORD:?set in .env}
       MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?set in .env}
+      MONGO_SEEDER_PASSWORD: ${MONGO_SEEDER_PASSWORD:?set in .env}
     volumes:
       - mongo-data:/data/db
       # Scripts here run only when mongo-data is empty (first start or after `down -v`).

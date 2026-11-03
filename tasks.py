@@ -40,13 +40,16 @@ def down(args: argparse.Namespace) -> int:
 
 
 def seed(args: argparse.Namespace) -> int:
-    print("seed: not implemented yet (Phase 1)", file=sys.stderr)
-    return 1
+    # Scripts run in the backend's environment (they share its models and pymongo).
+    script = ["uv", "run", "--project", str(BACKEND), "python"]
+    generate = run([*script, "scripts/generate.py", "--seed", "42", "--variant", "1"])
+    return generate or run([*script, "scripts/load.py"])
 
 
 def test(args: argparse.Namespace) -> int:
     env = {**os.environ, "LLM_MODE": "mock"}
-    return run(["uv", "run", "pytest", *args.extra], cwd=BACKEND, env=env)
+    # -rs prints the reason for every skipped test, e.g. Mongo not running.
+    return run(["uv", "run", "pytest", "-rs", *args.extra], cwd=BACKEND, env=env)
 
 
 def lint(args: argparse.Namespace) -> int:
@@ -69,7 +72,7 @@ def dev_web(args: argparse.Namespace) -> int:
 TASKS: dict[str, tuple[Callable[[argparse.Namespace], int], str]] = {
     "up": (up, "start MongoDB and wait until it is healthy"),
     "down": (down, "stop MongoDB (--volumes also deletes its data)"),
-    "seed": (seed, "generate and load telemetry (Phase 1)"),
+    "seed": (seed, "generate telemetry (seed 42, variant 1) and load it into MongoDB"),
     "test": (test, "run backend tests with LLM_MODE=mock (extra args go to pytest)"),
     "lint": (lint, "ruff check + format check"),
     "dev-api": (dev_api, "FastAPI with reload on http://127.0.0.1:8000"),

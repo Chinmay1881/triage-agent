@@ -63,7 +63,8 @@ def download() -> int:
         "json_sha256": hashlib.sha256(raw).hexdigest(),
         "gz_sha256": hashlib.sha256(packed).hexdigest(),
     }
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(manifest, indent=2) + "\n"
+    MANIFEST_PATH.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {BUNDLE_PATH} ({len(packed) / 1e6:.1f} MB), sha256 {manifest['gz_sha256']}")
     return 0
 

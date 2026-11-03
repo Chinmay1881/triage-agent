@@ -15,6 +15,7 @@ dependencies = [
     "pymongo>=4.19.0",
     "pyyaml>=6.0.3",
     "sse-starlette>=3.6.0",
+    "stix2>=3.0.2",
     "uvicorn>=0.54.0",
 ]
 
@@ -23,7 +24,8 @@ dependencies = [
 package = false
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+# ".." makes scripts/ and scenarios/ importable for the generator tests.
+pythonpath = [".", ".."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

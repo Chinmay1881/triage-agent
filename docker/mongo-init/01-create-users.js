@@ -20,3 +20,10 @@ db.getSiblingDB("triage").createUser({
   pwd: requireEnv("MONGO_APP_PASSWORD"),
   roles: [{ role: "readWrite", db: "triage" }],
 });
+
+// Only scripts/load.py uses this one, to (re)load telemetry. It cannot touch triage.
+db.getSiblingDB("telemetry").createUser({
+  user: "seeder",
+  pwd: requireEnv("MONGO_SEEDER_PASSWORD"),
+  roles: [{ role: "readWrite", db: "telemetry" }],
+});
