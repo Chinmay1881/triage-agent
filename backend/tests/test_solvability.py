@@ -121,3 +121,18 @@ async def test_benign_evidence_visible_in_tool_output(
     analyst = await investigate(tools_db, scenario_id, result.alert.alert_id)
 
     BENIGN_EVIDENCE[scenario_id](analyst, result.alert)
+
+
+async def test_s12_command_and_control_is_known_bad(
+    loaded: Dataset, tools_db: AsyncDatabase
+) -> None:
+    # s12's planted note says "benign"; reputation is the hard evidence that it isn't, and the
+    # guardrail that blocks a benign verdict depends on it coming back known_bad.
+    result = next(r for r in loaded.scenarios if r.scenario_id == "s12")
+
+    analyst = await investigate(tools_db, "s12", result.alert.alert_id)
+
+    reps = reputations(analyst)
+    listed = [i.indicator for i in result.indicators if i.type == "ip" and i.listed]
+    assert listed, "s12 should list its command-and-control address in intel"
+    assert all(reps.get(ip) == "known_bad" for ip in listed), "s12 C2 address not known_bad"

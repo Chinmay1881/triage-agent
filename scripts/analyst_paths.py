@@ -134,6 +134,28 @@ async def s06(a: Analyst, alert: dict[str, Any]) -> None:
     await a("get_process_tree", event_id=desktop["event_id"])
 
 
+async def s07(a: Analyst, alert: dict[str, Any]) -> None:
+    host, user, ts = alert["host"], alert["user"], alert["ts"]
+    tree = await a("get_process_tree", event_id=alert["trigger_event_ids"][0])
+    outlook = pick(
+        tree["ancestors"], "the mail client that opened the document", name="OUTLOOK.EXE"
+    )
+    await a("get_process_tree", event_id=outlook["event_id"])
+    for child in tree["descendants"]:
+        await a("get_process_tree", event_id=child["event_id"])
+    internal = []
+    for proc in [tree["process"], *tree["descendants"]]:
+        await a("get_dns_queries", host=host, around=ts, process_name=proc["name"])
+        groups = await a("get_network_connections", host=host, around=ts, process_name=proc["name"])
+        internal += [g for g in groups if "dst_host" in g]
+    if not internal:
+        raise PathError("expected the dropped program to reach an internal host")
+    # The internal destination that sent the most data back is where the files came from.
+    source = max(internal, key=lambda g: g["bytes_in"])
+    await a("get_host_info", host=source["dst_host"])
+    await a("get_logon_history", host=source["dst_host"], user=user, around=source["first_seen"])
+
+
 async def s08(a: Analyst, alert: dict[str, Any]) -> None:
     tree = await a("get_process_tree", event_id=alert["trigger_event_ids"][0])
     launcher = tree["ancestors"][0]
@@ -172,6 +194,22 @@ async def s11(a: Analyst, alert: dict[str, Any]) -> None:
     await a("get_network_connections", host=host, around=ts, process_name=creator["name"])
 
 
+async def s12(a: Analyst, alert: dict[str, Any]) -> None:
+    host, ts = alert["host"], alert["ts"]
+    tree = await a("get_process_tree", event_id=alert["trigger_event_ids"][0])
+    parent = tree["ancestors"][0]
+    await a("get_process_tree", event_id=parent["event_id"])
+    await a("check_reputation", indicator=parent["sha256"], type="hash")
+    external: set[str] = set()
+    for proc in (tree["process"], parent):
+        lookups = await a("get_dns_queries", host=host, around=ts, process_name=proc["name"])
+        external |= {ip for g in lookups for ip in g["answers"]}
+        groups = await a("get_network_connections", host=host, around=ts, process_name=proc["name"])
+        external |= {g["dst_ip"] for g in groups if "dst_host" not in g}
+    for ip in sorted(external):
+        await a("check_reputation", indicator=ip, type="ip")
+
+
 def _ts(value: str | datetime) -> datetime:
     return value if isinstance(value, datetime) else datetime.fromisoformat(value)
 
@@ -183,10 +221,12 @@ PATHS: dict[str, Callable[[Analyst, dict[str, Any]], Awaitable[None]]] = {
     "s04": s04,
     "s05": s05,
     "s06": s06,
+    "s07": s07,
     "s08": s08,
     "s09": s09,
     "s10": s10,
     "s11": s11,
+    "s12": s12,
 }
 
 
