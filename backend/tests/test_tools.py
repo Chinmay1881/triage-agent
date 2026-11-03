@@ -402,9 +402,11 @@ def pid_reuse(seeder_db: Database, datasets: dict[int, Dataset]) -> Iterator[dic
     ]
     rows = ds.collections()
     rows["events"] = rows["events"] + extra
-    load_collections(seeder_db, rows)
-    yield {"host": host, "pid": pid, "first": first}
-    load_collections(seeder_db, ds.collections())
+    try:
+        load_collections(seeder_db, rows)
+        yield {"host": host, "pid": pid, "first": first}
+    finally:
+        load_collections(seeder_db, ds.collections())
 
 
 @pytest.mark.mongo

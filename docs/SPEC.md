@@ -154,27 +154,29 @@ The agent can only call these 11 read-only functions. There is no shell, no code
 
 | Tool | Inputs | Returns (capped) |
 | --- | --- | --- |
-| `get_host_info` | host | Role, owner, OS, criticality 1–5 |
-| `get_user_info` | user | Department, title, admin or not, usual countries |
-| `search_process_events` | host, time window, optional name / cmdline substring | Up to 25 process starts, cmdlines cut to 300 chars |
-| `get_process_tree` | host, pid | Parents and children, 3 levels max |
-| `get_network_connections` | host, time window, optional remote IP | Up to 25 destinations, grouped, with bytes out |
-| `get_dns_queries` | host, time window | Up to 25 unique domains with counts |
-| `get_logon_history` | user, time window | Up to 25 logons: source IP, country, result, MFA |
-| `get_persistence_events` | host, time window | Scheduled tasks and similar changes |
+| `get_host_info` | hostname or internal IP | Role, owner, OS, IP, criticality 1–5 |
+| `get_user_info` | user | Department, title, admin or not, service account, usual countries |
+| `search_process_events` | host, time window, optional name / cmdline substring | Up to 25 process starts: cmdline (300 chars), signer (null = unsigned), sha256, `decoded_cmdline` for `-EncodedCommand` |
+| `get_process_tree` | `event_id` of any process event, or host + pid + ts | Ancestors and descendants (3 levels each) plus the process's own file writes, LSASS access and scheduled tasks |
+| `get_network_connections` | host, time window, optional remote IP / process | Up to 25 destination groups: count, first/last seen, bytes, processes, internal host or resolved domains |
+| `get_dns_queries` | host, time window, optional process | Up to 25 domains: count, answers, first/last seen, processes |
+| `get_logon_history` | user and/or host, time window | Up to 25 logons: source IP, country, result, MFA; says if a user isn't in the directory |
+| `get_persistence_events` | host, time window | Scheduled tasks: command, trigger, run-as, creating process |
 | `check_reputation` | indicator, type (ip, domain, hash) | known_bad / known_good / unknown, from the local intel file |
 | `search_attack_techniques` | keyword | Up to 5 matches from the pinned ATT&CK bundle |
-| `lookup_attack_technique` | technique ID | ID, name, current tactics, short description from the bundle |
+| `lookup_attack_technique` | technique ID | ID, name, current tactics, short description; flags revoked/deprecated |
 
 Rules every tool follows:
 
 - Inputs are validated with Pydantic. A bad host name or a 3-day window gets a clear error back to the agent, not an exception.
-- Time windows are capped at 24 hours. Default is the alert time ± 2 hours.
-- Every row includes its `event_id`, so findings can cite evidence.
-- Results are capped at roughly 1,500 tokens. Over the cap, the tool returns the count and "narrow your search".
-- Log content goes back wrapped as data (`{"untrusted_log_data": [...]}`), never pasted into the prompt as plain instructions.
+- Time windows are capped at 24 hours: `start` + `end`, or `around` (the alert time) for ± 2 hours.
+- Every event row includes its `event_id` (groups list up to 10), so findings can cite evidence.
+- Results are capped at about 1,500 tokens, estimated as `len(json) / 4`. Over the cap, rows are dropped from the end and the result says "showing N of M; narrow your search".
+- Encoded PowerShell is decoded before the 300-char cap, and the decoded text is capped too.
+- Log content goes back wrapped as data (`{"untrusted_log_data": ...}`), never pasted into the prompt as plain instructions. ATT&CK results come from the pinned bundle, not logs, so they go under `attack_catalog`.
+- `get_process_tree` resolves PID reuse: a parent is the latest earlier start of that PID on that host.
 - The telemetry collection is read through a MongoDB user that only has read access. Even a bug can't write.
-- Ground-truth fields and the `scenarios/` folder are not reachable from any tool.
+- Ground-truth fields and the `scenarios/` folder are not reachable from any tool; a static test bans filesystem access in `app/tools`.
 - Budget: 12 tool calls per investigation. When it runs out, the agent must conclude with what it has.
 
 ## The LangGraph agent

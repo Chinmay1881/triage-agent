@@ -26,9 +26,12 @@ pytestmark = pytest.mark.mongo
 def loaded(
     request: pytest.FixtureRequest, seeder_db: Database, datasets: dict[int, Dataset]
 ) -> Iterator[Dataset]:
-    load_collections(seeder_db, datasets[request.param].collections())
-    yield datasets[request.param]
-    load_collections(seeder_db, datasets[1].collections())
+    # try/finally so variant 1 is restored even if loading this variant fails partway.
+    try:
+        load_collections(seeder_db, datasets[request.param].collections())
+        yield datasets[request.param]
+    finally:
+        load_collections(seeder_db, datasets[1].collections())
 
 
 @pytest.mark.parametrize("scenario_id", sorted(PATHS))
