@@ -1,0 +1,7 @@
+{
+  "version": "20.0",
+  "source_url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-20.0.json",
+  "file": "enterprise-attack-20.0.json.gz",
+  "json_sha256": "81113ba98afa2928f3dcff62022539f7ce30c315c32e14422f11ff95ce534352",
+  "gz_sha256": "7a2b365dc6a7c4e1a66beb448dfb128ca9ace88abee6ad04067216047a1480cc"
+}
