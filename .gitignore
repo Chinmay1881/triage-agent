@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node (frontend arrives in Phase 6)
+node_modules/
+.next/
+
+# Regenerated from the seed by `python tasks.py seed`
+data/generated/
+scenarios/truth/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

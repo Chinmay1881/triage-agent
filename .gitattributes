@@ -1,0 +1,13 @@
+# Store text as LF in git and check out LF everywhere, so Windows and Linux
+# containers (e.g. the Mongo init script) see identical files.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff2 binary

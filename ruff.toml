@@ -1,0 +1,14 @@
+# Repo-wide so backend/, tasks.py, scripts/ and evals/ share one style.
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "RUF"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[lint.per-file-ignores]
+"backend/tests/**" = ["S101", "S105", "S106"]
+# tasks.py exists to run fixed developer commands (docker, uv) via subprocess.
+"tasks.py" = ["S603", "S607"]

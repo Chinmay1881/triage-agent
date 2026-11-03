@@ -1,0 +1,27 @@
+name: triage-agent
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    # Loopback only: the database is never reachable from the LAN.
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?set in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set in .env}
+      MONGO_TELEMETRY_READER_PASSWORD: ${MONGO_TELEMETRY_READER_PASSWORD:?set in .env}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?set in .env}
+    volumes:
+      - mongo-data:/data/db
+      # Scripts here run only when mongo-data is empty (first start or after `down -v`).
+      - ./docker/mongo-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  mongo-data:
