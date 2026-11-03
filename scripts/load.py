@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pymongo import ASCENDING, IndexModel, MongoClient
+from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +55,18 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def load_collections(db: Database, collections: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+    """Replace each telemetry collection with `collections[name]` and rebuild its indexes.
+    Also used by the tool tests to load other variants."""
+    for name, indexes in INDEXES.items():
+        rows = collections[name]
+        db.drop_collection(name)
+        if rows:
+            db[name].insert_many(rows, ordered=False)
+        db[name].create_indexes(indexes)
+    return {name: len(collections[name]) for name in INDEXES}
+
+
 def main() -> int:
     try:
         uri = SeederSettings().seeder_mongo_uri.get_secret_value()
@@ -68,13 +81,9 @@ def main() -> int:
     client: MongoClient = MongoClient(uri, serverSelectionTimeoutMS=3000, tz_aware=True)
     try:
         db = client.get_default_database()
-        for name, indexes in INDEXES.items():
-            rows = read_rows(GENERATED / f"{name}.jsonl")
-            db.drop_collection(name)
-            if rows:
-                db[name].insert_many(rows, ordered=False)
-            db[name].create_indexes(indexes)
-            print(f"loaded {len(rows):>6} {name}")
+        loaded = load_collections(db, {n: read_rows(GENERATED / f"{n}.jsonl") for n in INDEXES})
+        for name, n in loaded.items():
+            print(f"loaded {n:>6} {name}")
         counts = Counter(e["event_type"] for e in db["events"].find({}, {"event_type": 1}))
         print("events by type:")
         for event_type, n in sorted(counts.items()):

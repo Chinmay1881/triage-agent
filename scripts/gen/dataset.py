@@ -46,6 +46,16 @@ class Dataset:
     alerts: list[Alert]
     scenarios: list[ScenarioResult]
 
+    def collections(self) -> dict[str, list[dict[str, Any]]]:
+        """Rows per telemetry collection, as scripts/load.py inserts them."""
+        return {
+            "events": [e.model_dump() for e in self.events],
+            "hosts": [h.model_dump() for h in self.hosts],
+            "users": [u.model_dump() for u in self.users],
+            "intel": [i.model_dump() for i in self.intel],
+            "alerts": [a.model_dump() for a in self.alerts],
+        }
+
     def truth(self, result: ScenarioResult, seed: int, variant: int) -> dict[str, Any]:
         return {
             "scenario": result.scenario_id,

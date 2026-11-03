@@ -75,3 +75,61 @@ def test_detects_truth_paths_and_dynamic_imports(text: str) -> None:
 
 def test_allows_normal_app_imports() -> None:
     assert forbidden_imports("from app.telemetry.models import Event\nimport json") == []
+
+
+TOOLS_DIR = APP / "tools"
+# The tools read only MongoDB (and, via app.attack, the pinned ATT&CK bundle). No file,
+# process, network or dynamic-code access of their own.
+FORBIDDEN_TOOL_MODULES = {
+    "os",
+    "pathlib",
+    "shutil",
+    "io",
+    "glob",
+    "tempfile",
+    "subprocess",
+    "socket",
+    "urllib",
+    "http",
+    "requests",
+    "httpx",
+    "builtins",
+    "importlib",
+    "pickle",
+}
+FORBIDDEN_TOOL_CALLS = {"open", "exec", "eval", "compile", "__import__", "breakpoint"}
+TOOL_FILES = sorted(TOOLS_DIR.rglob("*.py"))
+
+
+def filesystem_access(source: str) -> list[str]:
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found += [a.name for a in node.names if a.name.split(".")[0] in FORBIDDEN_TOOL_MODULES]
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            if node.module.split(".")[0] in FORBIDDEN_TOOL_MODULES:
+                found.append(node.module)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in FORBIDDEN_TOOL_CALLS:
+                found.append(f"{node.func.id}()")
+    return found
+
+
+def test_tool_files_found() -> None:
+    assert len(TOOL_FILES) >= 5
+
+
+@pytest.mark.parametrize("path", TOOL_FILES, ids=lambda p: p.name)
+def test_tools_never_touch_filesystem_or_scenarios(path: Path) -> None:
+    source = path.read_text(encoding="utf-8")
+
+    assert filesystem_access(source) == []
+    assert "scenarios" not in source.lower()
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["import os", "from pathlib import Path", "open('x')", "import importlib", "eval('1')"],
+)
+def test_detects_filesystem_access(source: str) -> None:
+    assert filesystem_access(source)
