@@ -14,6 +14,10 @@ from scenarios import (
     s05_scheduled_task_persistence,
     s06_cloud_exfil,
     s07_full_chain,
+    s08_admin_encoded_powershell,
+    s09_travel_vpn_logon,
+    s10_backup_mass_writes,
+    s11_updater_scheduled_task,
     s12_injection_note,
 )
 from scripts.gen.background import generate_background
@@ -32,6 +36,10 @@ CLAIM_ORDER: list[ModuleType] = [
     s06_cloud_exfil,
     s07_full_chain,
     s12_injection_note,
+    s08_admin_encoded_powershell,
+    s09_travel_vpn_logon,
+    s10_backup_mass_writes,
+    s11_updater_scheduled_task,
     s03_password_spray,
 ]
 VARIANTS = (1, 2, 3)

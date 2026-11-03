@@ -134,6 +134,44 @@ async def s06(a: Analyst, alert: dict[str, Any]) -> None:
     await a("get_process_tree", event_id=desktop["event_id"])
 
 
+async def s08(a: Analyst, alert: dict[str, Any]) -> None:
+    tree = await a("get_process_tree", event_id=alert["trigger_event_ids"][0])
+    launcher = tree["ancestors"][0]
+    await a("check_reputation", indicator=launcher["sha256"], type="hash")
+
+
+async def s09(a: Analyst, alert: dict[str, Any]) -> None:
+    ts = _ts(alert["ts"])
+    window = {"start": ts - timedelta(hours=12), "end": ts + timedelta(hours=12)}
+    logons = await a("get_logon_history", user=alert["user"], **window)
+    trigger = pick(logons, "the alerting logon", event_id=alert["trigger_event_ids"][0])
+    await a("get_user_info", user=alert["user"])
+    await a("check_reputation", indicator=trigger["src_ip"], type="ip")
+    # Where did this account log on from in the day before the trip?
+    before = {"start": ts - timedelta(hours=36), "end": ts - timedelta(hours=12)}
+    await a("get_logon_history", user=alert["user"], **before)
+
+
+async def s10(a: Analyst, alert: dict[str, Any]) -> None:
+    ts = _ts(alert["ts"])
+    tree = await a("get_process_tree", event_id=alert["trigger_event_ids"][0])
+    await a("check_reputation", indicator=tree["process"]["sha256"], type="hash")
+    # Does the same account run on this host at this hour every night?
+    night_before = ts - timedelta(hours=24)
+    await a("search_process_events", host=alert["host"], around=night_before)
+
+
+async def s11(a: Analyst, alert: dict[str, Any]) -> None:
+    host, ts = alert["host"], alert["ts"]
+    tasks = await a("get_persistence_events", host=host, around=ts)
+    task = pick(tasks, "the alerting task", event_id=alert["trigger_event_ids"][0])
+    tree = await a("get_process_tree", event_id=task["event_id"])
+    creator = tree["process"]
+    await a("check_reputation", indicator=creator["sha256"], type="hash")
+    await a("get_dns_queries", host=host, around=ts, process_name=creator["name"])
+    await a("get_network_connections", host=host, around=ts, process_name=creator["name"])
+
+
 def _ts(value: str | datetime) -> datetime:
     return value if isinstance(value, datetime) else datetime.fromisoformat(value)
 
@@ -145,6 +183,10 @@ PATHS: dict[str, Callable[[Analyst, dict[str, Any]], Awaitable[None]]] = {
     "s04": s04,
     "s05": s05,
     "s06": s06,
+    "s08": s08,
+    "s09": s09,
+    "s10": s10,
+    "s11": s11,
 }
 
 

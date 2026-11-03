@@ -10,6 +10,8 @@ INTERNAL_DOMAIN = "corp.internal"
 BAD_NETS = (ipaddress.ip_network("203.0.113.0/24"), ipaddress.ip_network("198.51.100.0/24"))
 BAD_DOMAIN_SUFFIX = ".example"
 HOME_NET = ipaddress.ip_network("192.0.2.0/24")
+# The company's managed VPN point of presence abroad (s09). Benign, listed known_good.
+CORPORATE_VPN_EGRESS = "192.0.2.250"
 
 # domain -> resolved address
 BENIGN_DOMAINS: dict[str, str] = {

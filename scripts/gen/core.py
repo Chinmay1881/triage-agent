@@ -79,6 +79,15 @@ BINARIES: dict[str, tuple[str, str]] = {
     "python.exe": (r"C:\Program Files\Python312\python.exe", "Python Software Foundation"),
     "Acrobat.exe": (r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe", "Adobe Inc."),
     "BackupAgent.exe": (r"C:\Program Files\Vaultline\Backup\BackupAgent.exe", "Vaultline Ltd"),
+    "BackupJob.exe": (r"C:\Program Files\Vaultline\Backup\BackupJob.exe", "Vaultline Ltd"),
+    "AdminToolkit.exe": (
+        r"C:\Program Files\Northbeam\AdminToolkit\AdminToolkit.exe",
+        "Northbeam Software Ltd",
+    ),
+    "AdobeARM.exe": (
+        r"C:\Program Files (x86)\Common Files\Adobe\ARM\1.0\AdobeARM.exe",
+        "Adobe Inc.",
+    ),
 }
 
 
@@ -284,14 +293,22 @@ class World:
         return self.emit(ts, host, user, "logon", logon=logon)
 
     def create_task(
-        self, ts: datetime, proc: Proc, user: str, name: str, command: str, trigger: str
+        self,
+        ts: datetime,
+        proc: Proc,
+        user: str,
+        name: str,
+        command: str,
+        trigger: str,
+        run_as: str | None = None,
     ) -> Draft:
+        """`user` created the task; it runs as `run_as` (default: the same account)."""
         task = {
             "task_name": name,
             "action": "create",
             "command": command,
             "trigger": trigger,
-            "run_as": user,
+            "run_as": run_as or user,
         }
         return self.emit(ts, proc.host, user, "scheduled_task", process=proc.ref(), task=task)
 

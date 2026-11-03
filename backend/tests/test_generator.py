@@ -4,6 +4,7 @@ import itertools
 import os
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ import pytest
 from scripts.gen.dataset import CLAIM_ORDER, VARIANTS, Dataset
 from scripts.gen.infra import is_bad_domain, is_bad_ip
 from scripts.gen.safety import check_encoded, decode_encoded_commands
-from scripts.gen.scenario import encode_powershell
+from scripts.gen.scenario import ScenarioResult, encode_powershell
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATE = ROOT / "scripts" / "generate.py"
@@ -53,16 +54,54 @@ def test_same_seed_gives_identical_bytes_across_hash_seeds(tmp_path: Path) -> No
         assert (tmp_path / "a" / rel).read_bytes() == (tmp_path / "b" / rel).read_bytes(), rel
 
 
+def scenario(ds: Dataset, scenario_id: str) -> ScenarioResult:
+    return next(r for r in ds.scenarios if r.scenario_id == scenario_id)
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_scenarios_never_share_hosts_or_users(datasets: dict[int, Dataset], variant: int) -> None:
-    scenarios = datasets[variant].scenarios
-    for a, b in itertools.combinations(scenarios, 2):
-        assert not a.hosts() & b.hosts(), (a.scenario_id, b.scenario_id, a.hosts() & b.hosts())
+    ds = datasets[variant]
+    # VPN gateways are shared infrastructure (s03 and s09); time separation keeps them
+    # apart instead, see test_shared_gateway_scenarios_are_30h_apart.
+    shared = {h.hostname for h in ds.hosts if h.role == "vpn_gateway"}
+    assert len(ds.scenarios) == len(CLAIM_ORDER) == 12
+    for a, b in itertools.combinations(ds.scenarios, 2):
+        common_hosts = (a.hosts() & b.hosts()) - shared
+        assert not common_hosts, (a.scenario_id, b.scenario_id, common_hosts)
         assert not a.users() & b.users(), (a.scenario_id, b.scenario_id, a.users() & b.users())
 
 
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_shared_gateway_scenarios_are_30h_apart(datasets: dict[int, Dataset], variant: int) -> None:
+    ds = datasets[variant]
+    spray, travel = scenario(ds, "s03"), scenario(ds, "s09")
+
+    gap = min(abs(a.ts - b.ts) for a in spray.events for b in travel.events)
+
+    assert gap >= timedelta(hours=30), gap
+    assert {e.ts.date() for e in spray.events}.isdisjoint({e.ts.date() for e in travel.events})
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_traveller_has_no_ie_logons_before_trip(datasets: dict[int, Dataset], variant: int) -> None:
+    ds = datasets[variant]
+    travel = scenario(ds, "s09")
+    user = travel.alert.user
+    trip_start = min(e.ts for e in travel.events)
+
+    earlier = [
+        e
+        for e in ds.events
+        if e.event_type == "logon" and e.user == user and e.ts < trip_start and e.logon
+    ]
+
+    assert earlier, "background should give the traveller normal logons before the trip"
+    assert all(e.logon.country != "IE" for e in earlier if e.logon)
+    assert "IE" in next(u for u in ds.users if u.username == user).usual_countries
+
+
 def test_variants_move_scenarios(datasets: dict[int, Dataset]) -> None:
-    for index in range(6):
+    for index in range(len(CLAIM_ORDER)):
         placements = {
             (r.alert.host, r.alert.user, r.alert.ts)
             for r in (datasets[v].scenarios[index] for v in VARIANTS)

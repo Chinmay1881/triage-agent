@@ -6,7 +6,7 @@ from typing import Literal
 
 from app.telemetry.models import IntelEntry
 from scripts.gen.core import benign_sha256, fake_sha256
-from scripts.gen.infra import BENIGN_DOMAINS
+from scripts.gen.infra import BENIGN_DOMAINS, CORPORATE_VPN_EGRESS
 from scripts.gen.scenario import ScenarioResult
 
 KNOWN_GOOD_DOMAINS = [
@@ -29,6 +29,9 @@ KNOWN_GOOD_BINARIES = [
     "chrome.exe",
     "msedge.exe",
     "MsMpEng.exe",
+    "AdminToolkit.exe",
+    "AdobeARM.exe",
+    "BackupJob.exe",
 ]
 # Unrelated campaigns, from the top of the reserved ranges (scenarios use the bottom 150).
 DECOYS: list[tuple[str, Literal["ip", "domain", "hash"], str]] = [
@@ -66,6 +69,15 @@ def build_intel(results: list[ScenarioResult]) -> list[IntelEntry]:
         )
         for name in KNOWN_GOOD_BINARIES
     ]
+    entries.append(
+        IntelEntry(
+            indicator=CORPORATE_VPN_EGRESS,
+            type="ip",
+            reputation="known_good",
+            source="corporate-network",
+            description="Contoso managed VPN point of presence, Dublin",
+        )
+    )
     entries += [
         IntelEntry(
             indicator=indicator,

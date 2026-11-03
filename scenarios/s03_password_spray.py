@@ -10,11 +10,13 @@ SCENARIO_ID = "s03"
 GUESSED_NAMES = ["administrator", "test", "scanner", "backup"]
 COUNTRIES = ["NL", "RO", "BR", "VN"]
 ALERT_THRESHOLD = 10
+VPN_GATEWAY = "VPN-01"
 
 
 def inject(ctx: Context) -> ScenarioResult:
     w, rng = ctx.world, ctx.rng
-    gateway = ctx.pick(["VPN-01"])
+    # Shared infrastructure: s09 also logs on here, on a weekend at least 30 h away.
+    gateway = VPN_GATEWAY
     ip = ctx.bad_ip(1)
     country = COUNTRIES[(ctx.variant - 1) % len(COUNTRIES)]
     people = sorted(
