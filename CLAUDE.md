@@ -40,6 +40,10 @@ Windows notes: use `pathlib` for paths, never hard-coded `/` or `\`; keep shell-
 10. Bad infrastructure in synthetic data uses only 203.0.113.0/24, 198.51.100.0/24 and `.example` domains.
 11. Secrets live in `.env` only. Never commit or log API keys.
 
+## Files you don't open
+
+`scenarios/s07_full_chain.py`, `scenarios/s12_injection_note.py` and `scenarios/scenario_text.yaml` are maintained by hand outside Claude Code. Don't read, edit or print them, and don't print raw tool output, agent transcripts or decoded command lines for scenario s12. They're covered by tests through `CLAIM_ORDER`; when debugging, use s01-s11. Stage them with `git add` without opening them.
+
 ## How to work
 
 - Show a short plan and wait for approval before writing code for a new phase.

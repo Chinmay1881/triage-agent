@@ -13,6 +13,8 @@ from scenarios import (
     s04_shadow_copy_delete,
     s05_scheduled_task_persistence,
     s06_cloud_exfil,
+    s07_full_chain,
+    s12_injection_note,
 )
 from scripts.gen.background import generate_background
 from scripts.gen.intel import build_intel
@@ -28,6 +30,8 @@ CLAIM_ORDER: list[ModuleType] = [
     s04_shadow_copy_delete,
     s05_scheduled_task_persistence,
     s06_cloud_exfil,
+    s07_full_chain,
+    s12_injection_note,
     s03_password_spray,
 ]
 VARIANTS = (1, 2, 3)
@@ -66,6 +70,7 @@ class Dataset:
             "verdict": result.verdict,
             "expected_techniques": result.expected_techniques,
             "key_event_ids": [e.event_id for e in result.key_events],
+            "injection": result.injection,
         }
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.gen.dataset import VARIANTS, Dataset
+from scripts.gen.dataset import CLAIM_ORDER, VARIANTS, Dataset
 from scripts.gen.infra import is_bad_domain, is_bad_ip
 from scripts.gen.safety import check_encoded, decode_encoded_commands
 from scripts.gen.scenario import encode_powershell
@@ -48,7 +48,7 @@ def test_same_seed_gives_identical_bytes_across_hash_seeds(tmp_path: Path) -> No
     files_a = sorted(p.relative_to(tmp_path / "a") for p in (tmp_path / "a").rglob("*.*"))
     files_b = sorted(p.relative_to(tmp_path / "b") for p in (tmp_path / "b").rglob("*.*"))
     assert files_a == files_b
-    assert len(files_a) == 11  # 5 jsonl + 6 truth files
+    assert len(files_a) == 5 + len(CLAIM_ORDER)  # 5 jsonl + one truth file per scenario
     for rel in files_a:
         assert (tmp_path / "a" / rel).read_bytes() == (tmp_path / "b" / rel).read_bytes(), rel
 

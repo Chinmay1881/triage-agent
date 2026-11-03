@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from app.attack.catalog import get_catalog
-from scripts.gen.dataset import VARIANTS, Dataset
+from scripts.gen.dataset import CLAIM_ORDER, VARIANTS, Dataset
 from scripts.generate import write_dataset
 
 SEED = 42
@@ -20,7 +20,7 @@ def test_truth_techniques_exist_in_catalog(
     truth_dir = tmp_path / "truth"
     write_dataset(datasets[variant], SEED, variant, tmp_path / "generated", truth_dir)
     truth_files = sorted(truth_dir.glob("s*.yaml"))
-    assert [p.stem for p in truth_files] == ["s01", "s02", "s03", "s04", "s05", "s06"]
+    assert [p.stem for p in truth_files] == sorted(m.SCENARIO_ID for m in CLAIM_ORDER)
 
     catalog = get_catalog()
     for path in truth_files:

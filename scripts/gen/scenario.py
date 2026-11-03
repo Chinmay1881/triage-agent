@@ -44,6 +44,8 @@ class ScenarioResult:
     key_events: list[Draft]
     alert: AlertDraft
     indicators: list[Indicator]
+    # True when the scenario plants text meant to steer an AI triage agent (s12).
+    injection: bool = False
 
     def hosts(self) -> set[str]:
         return {e.host for e in self.events} | {self.alert.host}
