@@ -1,4 +1,4 @@
-"""The agent's whole sandbox: 11 fixed, read-only investigation tools.
+"""The agent's whole sandbox: 12 fixed, read-only investigation tools.
 
 There is no shell, no code execution and no free-form query. Each tool is a Pydantic input
 model plus an async function over the read-only telemetry db. `call_tool` is the single
@@ -15,7 +15,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 from pymongo.asynchronous.database import AsyncDatabase
 
-from app.tools import attack, inventory, logons, network, process
+from app.tools import anomaly, attack, inventory, logons, network, process
 from app.tools._common import ToolError, ToolInput, enforce_cap, format_validation_error
 
 WINDOW_HELP = (
@@ -121,6 +121,17 @@ TOOLS: dict[str, Tool] = {
             "pinned v20 bundle; flags revoked or deprecated IDs.",
             attack.TechniqueLookupInput,
             attack.lookup_attack_technique,
+        ),
+        Tool(
+            "score_anomaly",
+            "How unusual 1-10 process_start or network_conn events are, from a model trained "
+            "on a separate baseline week. Per event: score 0-1 (higher = more unusual), "
+            "percentile among baseline events of the same type, and the 3 features that stood "
+            "out with their values; baseline_share is how often the baseline had a value at "
+            "least that extreme. Unusual is not the same as malicious: weigh it with the "
+            "other evidence." + UNTRUSTED,
+            anomaly.AnomalyInput,
+            anomaly.score_anomaly,
         ),
     ]
 }

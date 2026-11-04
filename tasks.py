@@ -11,6 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
+MODELS = ROOT / "data" / "models"
+ARTIFACTS = ("anomaly.joblib", "injection.joblib")
+# Scripts run in the backend's environment (they share its models and pymongo).
+SCRIPT = ["uv", "run", "--project", str(BACKEND), "python"]
 
 
 def run(cmd: Sequence[str], cwd: Path = ROOT, env: dict[str, str] | None = None) -> int:
@@ -40,10 +44,17 @@ def down(args: argparse.Namespace) -> int:
 
 
 def seed(args: argparse.Namespace) -> int:
-    # Scripts run in the backend's environment (they share its models and pymongo).
-    script = ["uv", "run", "--project", str(BACKEND), "python"]
-    generate = run([*script, "scripts/generate.py", "--seed", "42", "--variant", "1"])
-    return generate or run([*script, "scripts/load.py"])
+    generate = run([*SCRIPT, "scripts/generate.py", "--seed", "42", "--variant", "1"])
+    loaded = generate or run([*SCRIPT, "scripts/load.py"])
+    if loaded or all((MODELS / name).exists() for name in ARTIFACTS):
+        return loaded
+    print("model artifacts missing; training them")
+    return train(args)
+
+
+def train(args: argparse.Namespace) -> int:
+    # The baseline is seed 7, background only: never the seed-42 eval week.
+    return run([*SCRIPT, "scripts/train.py", "--seed", "7"])
 
 
 def test(args: argparse.Namespace) -> int:
@@ -72,7 +83,8 @@ def dev_web(args: argparse.Namespace) -> int:
 TASKS: dict[str, tuple[Callable[[argparse.Namespace], int], str]] = {
     "up": (up, "start MongoDB and wait until it is healthy"),
     "down": (down, "stop MongoDB (--volumes also deletes its data)"),
-    "seed": (seed, "generate telemetry (seed 42, variant 1) and load it into MongoDB"),
+    "seed": (seed, "generate and load telemetry (seed 42, variant 1); train if models missing"),
+    "train": (train, "train the anomaly model (baseline seed 7) and injection classifier"),
     "test": (test, "run backend tests with LLM_MODE=mock (extra args go to pytest)"),
     "lint": (lint, "ruff check + format check"),
     "dev-api": (dev_api, "FastAPI with reload on http://127.0.0.1:8000"),

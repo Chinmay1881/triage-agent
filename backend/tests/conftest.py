@@ -13,16 +13,30 @@ from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 os.environ["LLM_MODE"] = "mock"
 
 from app.config import get_settings
+from app.ml import anomaly, injection
 from app.telemetry.db import telemetry_client, telemetry_db
-from scripts.gen.dataset import VARIANTS, Dataset, build_dataset
+from scripts.gen.dataset import VARIANTS, Dataset, build_background, build_dataset
 from scripts.load import SeederSettings
+from scripts.train import injection_training_data
 
 SEED = 42
+BASELINE_SEED = 7
 
 
 @cache
 def dataset(variant: int) -> Dataset:
     return build_dataset(SEED, variant)
+
+
+@cache
+def baseline_week() -> Dataset:
+    """The seed-7 background-only week both models learn "normal" from."""
+    return build_background(BASELINE_SEED)
+
+
+@cache
+def baseline_docs() -> list[dict]:
+    return [e.model_dump() for e in baseline_week().events]
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -55,6 +69,17 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def datasets() -> dict[int, Dataset]:
     """All three variants of seed 42, built in memory once per test session."""
     return {variant: dataset(variant) for variant in VARIANTS}
+
+
+@pytest.fixture(scope="session")
+def anomaly_model() -> anomaly.AnomalyModel:
+    """Trained in memory, so tests never depend on `python tasks.py train` having run."""
+    return anomaly.train(baseline_docs(), BASELINE_SEED)
+
+
+@pytest.fixture(scope="session")
+def injection_model() -> injection.InjectionModel:
+    return injection.train(*injection_training_data(baseline_week(), BASELINE_SEED))
 
 
 @pytest.fixture(scope="session")

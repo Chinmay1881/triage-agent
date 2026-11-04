@@ -1,0 +1,210 @@
+"""The trained models: deterministic training, anomaly scores and explanations, the anomaly
+eval, and the injection classifier on s12 and on background command lines.
+
+Both models are trained in memory (conftest) on the seed-7 baseline week; the classifier also
+on the dataset's train split. s12's text is never put inside an assert expression, so a
+failure can't print it.
+"""
+
+from collections import Counter
+from datetime import UTC, datetime
+from typing import Any
+
+import numpy as np
+import pytest
+
+from app.ml import anomaly, injection
+from evals.ml_anomaly import evaluate as evaluate_anomaly
+from evals.ml_anomaly import precision_at_k, rule_score
+from evals.ml_injection import (
+    EvalTexts,
+    full_eval_texts,
+    limited_eval_texts,
+    read_hard_sets,
+)
+from evals.ml_injection import evaluate as evaluate_injection
+from scripts.gen.benign_english import benign_english_cmdlines
+from scripts.gen.dataset import Dataset
+from scripts.train import injection_training_data
+from tests.conftest import BASELINE_SEED, baseline_docs, baseline_week
+
+
+def process_doc(**process: Any) -> dict[str, Any]:
+    return {
+        "event_id": "evt_000001",
+        "event_type": "process_start",
+        "host": "FIN-WS-01",
+        "ts": datetime(2026, 10, 6, 3, tzinfo=UTC),
+        "process": {"pid": 9, "ppid": 8, "sha256": "0" * 64} | process,
+    }
+
+
+# --- anomaly model -----------------------------------------------------------------------
+
+
+def test_anomaly_training_is_deterministic(
+    anomaly_model: anomaly.AnomalyModel, datasets: dict[int, Dataset]
+) -> None:
+    again = anomaly.train(baseline_docs(), BASELINE_SEED)
+    docs = [e.model_dump() for e in datasets[1].events if e.event_type in anomaly.FEATURES]
+
+    first = [s.score for s in anomaly_model.score_events(docs) if s]
+    second = [s.score for s in again.score_events(docs) if s]
+
+    assert first == second
+
+
+def test_unseen_unsigned_temp_binary_stands_out(anomaly_model: anomaly.AnomalyModel) -> None:
+    doc = process_doc(
+        name="payload.exe",
+        parent_name="WINWORD.EXE",
+        cmdline=r"C:\Users\a.b\AppData\Local\Temp\payload.exe /quiet",
+        signer=None,
+    )
+
+    (score,) = anomaly_model.score_events([doc])
+
+    assert score is not None and 0 < score.score < 1
+    assert score.percentile > 0.99
+    assert score.features["parent_child_count_fleet"] == 0
+    assert len(score.stood_out) == anomaly.TOP_FEATURES
+    assert all(s.baseline_share < 0.01 for s in score.stood_out)
+
+
+def test_common_signed_process_is_unremarkable(anomaly_model: anomaly.AnomalyModel) -> None:
+    doc = process_doc(
+        name="chrome.exe",
+        parent_name="explorer.exe",
+        cmdline=r'"C:\Program Files\Google\Chrome\Application\chrome.exe"',
+        signer="Google LLC",
+    ) | {"ts": datetime(2026, 10, 6, 9, tzinfo=UTC)}
+
+    (score,) = anomaly_model.score_events([doc])
+
+    assert score is not None and score.percentile < 0.9
+
+
+def test_unscored_event_types_get_none(anomaly_model: anomaly.AnomalyModel) -> None:
+    logon = {"event_id": "evt_000002", "event_type": "logon", "host": "DC-01"}
+
+    assert anomaly_model.score_events([logon]) == [None]
+
+
+def test_tail_share_is_the_smaller_tail() -> None:
+    column = np.array([[0.0], [1.0], [2.0], [3.0]])
+
+    shares = anomaly.tail_shares(column, np.array([[3.0], [1.0], [9.0]]))
+
+    assert shares.ravel().tolist() == [0.25, 0.5, 0.0]
+
+
+def test_precision_at_k_counts_ties_at_expected_value() -> None:
+    assert precision_at_k([1, 0, 1, 0], [1, 1, 1, 0], k=2) == pytest.approx(2 / 3)
+
+
+def test_rule_baseline_fires_on_unsigned_or_unseen_pairs() -> None:
+    assert rule_score({"unsigned": 1.0, "parent_child_count_fleet": 40}) == 1.0
+    assert rule_score({"unsigned": 0.0, "parent_child_count_fleet": 0}) == 1.0
+    assert rule_score({"process_dest_count_fleet": 0, "new_destination": 1.0}) == 1.0
+    assert rule_score({"unsigned": 0.0, "parent_child_count_fleet": 3}) == 0.0
+
+
+def test_anomaly_roc_auc_above_0_8(
+    anomaly_model: anomaly.AnomalyModel, datasets: dict[int, Dataset]
+) -> None:
+    result = evaluate_anomaly(anomaly_model, datasets[1])
+
+    assert result["counts"]["malicious_key_events"] > 0
+    assert result["isolation_forest"]["roc_auc"] > 0.8
+
+
+# --- injection classifier ----------------------------------------------------------------
+
+
+def test_injection_training_is_deterministic(injection_model: injection.InjectionModel) -> None:
+    again = injection.train(*injection_training_data(baseline_week(), BASELINE_SEED))
+
+    assert again.features == injection_model.features
+    assert again.threshold == injection_model.threshold
+    assert np.array_equal(again.pipeline[-1].coef_, injection_model.pipeline[-1].coef_)
+
+
+def test_threshold_maximises_f1() -> None:
+    labels = np.array([0, 0, 1, 1])
+
+    assert injection.best_f1_threshold(labels, np.array([0.1, 0.4, 0.35, 0.8])) == 0.35
+
+
+def test_feature_choice_is_best_cv_f1_with_ties_to_earlier_candidate() -> None:
+    assert injection.choose_features({"char": 0.8, "word": 0.9, "char+word": 0.85}) == "word"
+    assert injection.choose_features({"char": 0.9, "word": 0.9, "char+word": 0.9}) == "char"
+
+
+def test_training_records_all_three_cv_scores(injection_model: injection.InjectionModel) -> None:
+    assert set(injection_model.cv_f1) == set(injection.CANDIDATES)
+    assert injection_model.features == injection.choose_features(injection_model.cv_f1)
+
+
+@pytest.fixture(scope="module")
+def injection_eval(
+    injection_model: injection.InjectionModel, datasets: dict[int, Dataset]
+) -> dict[str, Any]:
+    def scores(texts: list[str]) -> list[float]:
+        return injection_model.scores(texts).tolist()
+
+    return evaluate_injection(scores, injection_model.threshold, full_eval_texts(datasets[1]))
+
+
+def test_classifier_false_positive_rate_on_held_out_hard_set(
+    injection_eval: dict[str, Any],
+) -> None:
+    # hard_2 was written before the benign-English templates and is never trained on; the
+    # generated background is too close to the training data to be a fair test.
+    assert injection_eval["hard_2"]["lines"] == 40
+    assert injection_eval["hard_2"]["false_positive_rate"] <= 0.10
+
+
+def test_injection_eval_reports_s12_as_boolean(injection_eval: dict[str, Any]) -> None:
+    assert isinstance(injection_eval["s12_trigger_flagged"], bool)
+
+
+def test_limited_texts_respect_limit() -> None:
+    data = EvalTexts(
+        test_texts=[f"q{i}" for i in range(116)],
+        test_labels=[i % 2 for i in range(116)],
+        hard_sets={"hard_1": [f"h{i}" for i in range(42)], "hard_2": [f"k{i}" for i in range(40)]},
+        background=Counter({f"cmd{i}": 1 for i in range(500)}),
+        triggers=[["a", "b"]],
+    )
+
+    limited = limited_eval_texts(data, 300)
+
+    hard = sum(map(len, limited.hard_sets.values()))
+    sent = len(limited.test_texts) + hard + len(limited.background) + 2
+    assert sent == 300 and len(limited.test_texts) == 116 and hard == 82
+    assert len(limited.background) == 100
+    assert len(limited_eval_texts(data, 1000).background) == 200
+
+
+# --- benign-English training rows --------------------------------------------------------
+
+
+def normalised(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def test_benign_english_is_deterministic_and_distinct() -> None:
+    lines = benign_english_cmdlines(BASELINE_SEED)
+
+    assert lines == benign_english_cmdlines(BASELINE_SEED)
+    assert len(lines) == len(set(lines)) == 400
+    words = " ".join(lines).lower()
+    assert all(w in words for w in ("instructions", "prompt", "system", "ignore", "override"))
+
+
+def test_benign_english_never_overlaps_hard_sets() -> None:
+    generated = {normalised(t) for t in benign_english_cmdlines(BASELINE_SEED)}
+
+    for name, texts in read_hard_sets().items():
+        overlap = [t for t in texts if normalised(t) in generated]
+        assert overlap == [], name
