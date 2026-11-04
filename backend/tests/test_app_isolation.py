@@ -142,3 +142,22 @@ def test_tools_never_touch_filesystem_or_scenarios(path: Path) -> None:
 )
 def test_detects_filesystem_access(source: str) -> None:
     assert filesystem_access(source)
+
+
+BLOCKLIST_NAME = "cli_blocklist"
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted((APP / "agent").rglob("*.py")) + TOOL_FILES,
+    ids=lambda p: p.relative_to(APP).as_posix(),
+)
+def test_agent_and_tools_never_read_the_cli_blocklist(path: Path) -> None:
+    # The blocklist names the injection scenario's alert. Only app/cli.py may know it; the
+    # agent must investigate every alert without being told which one is the trap.
+    assert BLOCKLIST_NAME not in path.read_text(encoding="utf-8")
+
+
+def test_only_the_cli_mentions_the_blocklist() -> None:
+    users = [p for p in APP.rglob("*.py") if BLOCKLIST_NAME in p.read_text(encoding="utf-8")]
+    assert users == [APP / "cli.py"]

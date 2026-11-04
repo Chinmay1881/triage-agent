@@ -12,7 +12,7 @@ from pymongo.database import Database
 from app.ml import ModelMissingError
 from app.ml import anomaly as anomaly_model_module
 from app.telemetry.decode import UNDECODABLE, decode_encoded_command
-from app.tools import TOOLS, call_tool, langchain_tools
+from app.tools import TOOLS, call_tool, tool_specs
 from app.tools._common import (
     CMDLINE_CHARS,
     TOKEN_CAP,
@@ -38,9 +38,18 @@ def scenario(ds: Dataset, scenario_id: str) -> ScenarioResult:
 
 def test_twelve_tools_with_descriptions() -> None:
     assert len(TOOLS) == 12
-    tools = langchain_tools(db=None)  # type: ignore[arg-type]
-    assert sorted(t.name for t in tools) == sorted(TOOLS)
-    assert all(len(t.description) > 60 for t in tools)
+    specs = [s["function"] for s in tool_specs()]
+    assert sorted(s["name"] for s in specs) == sorted(TOOLS)
+    assert all(len(s["description"]) > 60 for s in specs)
+
+
+def test_compact_schema_keeps_constraints_and_drops_noise() -> None:
+    (spec,) = [s["function"] for s in tool_specs() if s["function"]["name"] == "get_process_tree"]
+    text = str(spec["parameters"])
+
+    assert "anyOf" not in text and "'title'" not in text and "'default': None" not in text
+    assert spec["parameters"]["properties"]["event_id"]["pattern"] == r"^evt_\d{6}$"
+    assert spec["parameters"]["additionalProperties"] is False
 
 
 def test_decode_happens_before_cap() -> None:

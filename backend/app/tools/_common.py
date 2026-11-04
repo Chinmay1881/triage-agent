@@ -22,7 +22,6 @@ from pydantic import (
     AfterValidator,
     BaseModel,
     ConfigDict,
-    Field,
     PrivateAttr,
     StringConstraints,
     ValidationError,
@@ -64,11 +63,10 @@ class ToolInput(BaseModel):
 
 
 class WindowInput(ToolInput):
-    around: UtcDatetime | None = Field(
-        default=None, description="Center of a ±2 h window, usually the alert time (UTC)."
-    )
-    start: UtcDatetime | None = Field(default=None, description="Window start (UTC).")
-    end: UtcDatetime | None = Field(default=None, description="Window end (UTC), ≤ 24 h later.")
+    # No per-field descriptions: the investigate prompt explains windows once for all tools.
+    around: UtcDatetime | None = None
+    start: UtcDatetime | None = None
+    end: UtcDatetime | None = None
 
     _start: datetime = PrivateAttr()
     _end: datetime = PrivateAttr()

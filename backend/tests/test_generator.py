@@ -49,7 +49,8 @@ def test_same_seed_gives_identical_bytes_across_hash_seeds(tmp_path: Path) -> No
     files_a = sorted(p.relative_to(tmp_path / "a") for p in (tmp_path / "a").rglob("*.*"))
     files_b = sorted(p.relative_to(tmp_path / "b") for p in (tmp_path / "b").rglob("*.*"))
     assert files_a == files_b
-    assert len(files_a) == 5 + len(CLAIM_ORDER)  # 5 jsonl + one truth file per scenario
+    # 5 jsonl, the CLI blocklist, and one truth file per scenario.
+    assert len(files_a) == 5 + 1 + len(CLAIM_ORDER)
     for rel in files_a:
         assert (tmp_path / "a" / rel).read_bytes() == (tmp_path / "b" / rel).read_bytes(), rel
 

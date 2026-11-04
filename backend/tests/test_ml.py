@@ -121,12 +121,19 @@ def test_anomaly_roc_auc_above_0_8(
 # --- injection classifier ----------------------------------------------------------------
 
 
-def test_injection_training_is_deterministic(injection_model: injection.InjectionModel) -> None:
-    again = injection.train(*injection_training_data(baseline_week(), BASELINE_SEED))
+def test_injection_training_is_deterministic() -> None:
+    # Determinism doesn't depend on data size, so two trainings on a fixed subset (every 20th
+    # row, both classes) prove it without a second full training; the full model is trained
+    # once per session (conftest) and shared.
+    texts, labels = injection_training_data(baseline_week(), BASELINE_SEED)
+    subset = (texts[::20], labels[::20])
 
-    assert again.features == injection_model.features
-    assert again.threshold == injection_model.threshold
-    assert np.array_equal(again.pipeline[-1].coef_, injection_model.pipeline[-1].coef_)
+    first, second = injection.train(*subset), injection.train(*subset)
+
+    assert 0 < sum(subset[1]) < len(subset[1])
+    assert first.features == second.features and first.cv_f1 == second.cv_f1
+    assert first.threshold == second.threshold
+    assert np.array_equal(first.pipeline[-1].coef_, second.pipeline[-1].coef_)
 
 
 def test_threshold_maximises_f1() -> None:

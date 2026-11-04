@@ -109,3 +109,12 @@ async def tools_db() -> AsyncIterator[AsyncDatabase]:
     client = telemetry_client()
     yield telemetry_db(client)
     await client.close()
+
+
+@pytest.fixture
+def trained_classifier(
+    monkeypatch: pytest.MonkeyPatch, injection_model: injection.InjectionModel
+) -> injection.InjectionModel:
+    """Agent tests use the in-memory classifier, not the artifact from `python tasks.py train`."""
+    monkeypatch.setattr(injection, "load", lambda: injection_model)
+    return injection_model
