@@ -73,10 +73,10 @@ def main() -> int:
     texts, labels = injection_training_data(baseline, args.seed)
     classifier = injection.train(texts, labels)
     injection.save(classifier)
-    print(
-        f"injection: {len(texts)} training texts ({sum(labels)} injections), "
-        f"threshold {classifier.threshold:.3f}, wrote {injection.ARTIFACT}"
-    )
+    cv = ", ".join(f"{f} {score:.4f}" for f, score in classifier.cv_f1.items())
+    print(f"injection: {len(texts)} training texts ({sum(labels)} injections)")
+    print(f"  5-fold CV F1: {cv}; chose {classifier.features}")
+    print(f"  threshold {classifier.threshold:.3f}, wrote {injection.ARTIFACT}")
     return 0
 
 

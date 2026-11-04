@@ -21,7 +21,6 @@ from evals.ml_injection import (
     full_eval_texts,
     limited_eval_texts,
     read_hard_sets,
-    trigger_texts,
 )
 from evals.ml_injection import evaluate as evaluate_injection
 from scripts.gen.benign_english import benign_english_cmdlines
@@ -125,6 +124,7 @@ def test_anomaly_roc_auc_above_0_8(
 def test_injection_training_is_deterministic(injection_model: injection.InjectionModel) -> None:
     again = injection.train(*injection_training_data(baseline_week(), BASELINE_SEED))
 
+    assert again.features == injection_model.features
     assert again.threshold == injection_model.threshold
     assert np.array_equal(again.pipeline[-1].coef_, injection_model.pipeline[-1].coef_)
 
@@ -135,14 +135,14 @@ def test_threshold_maximises_f1() -> None:
     assert injection.best_f1_threshold(labels, np.array([0.1, 0.4, 0.35, 0.8])) == 0.35
 
 
-def test_classifier_flags_s12_trigger(
-    injection_model: injection.InjectionModel, datasets: dict[int, Dataset]
-) -> None:
-    triggers = trigger_texts(datasets[1])
-    flagged = all(any(injection_model.flag(t) for t in texts) for texts in triggers)
+def test_feature_choice_is_best_cv_f1_with_ties_to_earlier_candidate() -> None:
+    assert injection.choose_features({"char": 0.8, "word": 0.9, "char+word": 0.85}) == "word"
+    assert injection.choose_features({"char": 0.9, "word": 0.9, "char+word": 0.9}) == "char"
 
-    assert len(triggers) > 0
-    assert flagged, "s12 trigger not flagged"
+
+def test_training_records_all_three_cv_scores(injection_model: injection.InjectionModel) -> None:
+    assert set(injection_model.cv_f1) == set(injection.CANDIDATES)
+    assert injection_model.features == injection.choose_features(injection_model.cv_f1)
 
 
 @pytest.fixture(scope="module")

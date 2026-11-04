@@ -14,10 +14,11 @@ lines, and whether s12's trigger is flagged.
 - s12_trigger_flagged: every trigger event of s12's alert has its command line or decoded
   text flagged. A boolean only: s12's text is never printed or written.
 
---prompt-guard adds the same metrics for Llama Prompt Guard 2 (86M) on Groq, on at most
---limit texts: s12's trigger texts, the full test split, both hard sets, then a fixed-seed
-sample of up to 200 distinct background command lines. Skipped without GROQ_API_KEY or
-with LLM_MODE=mock.
+--prompt-guard adds the same metrics for Llama Prompt Guard 2 (86M) on Groq. Its threshold
+is picked the way ours is, by best F1, on a fixed-seed sample of 200 train-split rows, rather
+than left at a generic 0.5. It is then scored on at most --limit texts: s12's trigger texts,
+the full test split, both hard sets, then a fixed-seed sample of up to 200 distinct background
+command lines. Skipped without GROQ_API_KEY or with LLM_MODE=mock.
 Writes evals/results/injection_<date>.json; prints metrics only.
 """
 
@@ -34,6 +35,7 @@ from collections.abc import Callable, Sequence  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from typing import Any  # noqa: E402
 
+import numpy as np  # noqa: E402
 from langchain.chat_models import init_chat_model  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 from sklearn.metrics import precision_recall_fscore_support  # noqa: E402
@@ -47,7 +49,7 @@ from scripts.gen.dataset import Dataset  # noqa: E402
 
 INJECTION_SCENARIO = "s12"
 PROMPT_GUARD = "meta-llama/llama-prompt-guard-2-86m"
-PROMPT_GUARD_THRESHOLD = 0.5
+THRESHOLD_SAMPLE = 200
 # The model's context is 512 tokens; this keeps a text comfortably inside it.
 PROMPT_GUARD_CHARS = 1500
 BACKGROUND_SAMPLE = 200
@@ -195,6 +197,16 @@ def prompt_guard_scorer(api_key: str) -> Scorer:
     return score
 
 
+def prompt_guard_threshold(score: Scorer) -> float:
+    """Best-F1 cut-off on a fixed-seed sample of the train split, never the test split."""
+    texts, labels = fetch_datasets.read_split("train")
+    picked = random.Random(SAMPLE_SEED).sample(range(len(texts)), THRESHOLD_SAMPLE)
+    probabilities = score([texts[i] for i in picked])
+    return injection.best_f1_threshold(
+        np.array([labels[i] for i in picked]), np.array(probabilities)
+    )
+
+
 def groq_key() -> str | None:
     try:
         settings = get_settings()
@@ -220,6 +232,8 @@ def main() -> int:
     result: dict[str, Any] = {
         "dataset_revision": fetch_datasets.read_manifest()["revision"],
         "threshold": round(model.threshold, 4),
+        "features": model.features,
+        "cv_f1": {f: round(v, 4) for f, v in model.cv_f1.items()},
         "classifier": evaluate(lambda texts: model.scores(texts).tolist(), model.threshold, data),
     }
     if args.prompt_guard:
@@ -228,15 +242,19 @@ def main() -> int:
             result["prompt_guard"] = {"skipped": "no GROQ_API_KEY, or LLM_MODE=mock"}
         else:
             try:
+                scorer = prompt_guard_scorer(key)
+                threshold = prompt_guard_threshold(scorer)
                 limited = limited_eval_texts(data, args.limit)
-                result["prompt_guard"] = evaluate(
-                    prompt_guard_scorer(key), PROMPT_GUARD_THRESHOLD, limited
-                )
+                result["prompt_guard_threshold"] = round(threshold, 4)
+                result["prompt_guard"] = evaluate(scorer, threshold, limited)
             except PromptGuardError as exc:
                 result["prompt_guard"] = {"skipped": str(exc)}
     path = write_result("injection", result)
 
+    print(f"classifier: {result['features']}, CV F1 {result['cv_f1']}")
     print(f"threshold {result['threshold']} (chosen on the train split)")
+    if "prompt_guard_threshold" in result:
+        print(f"prompt guard threshold {result['prompt_guard_threshold']} (train-split sample)")
     for name in ("classifier", "prompt_guard"):
         if name not in result:
             continue
