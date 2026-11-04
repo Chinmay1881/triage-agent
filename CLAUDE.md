@@ -5,6 +5,7 @@ AI agent that does a SOC analyst's first-pass investigation of a security alert 
 ## Stack
 
 - Backend: Python 3.12, uv, FastAPI, Pydantic v2, LangGraph 1.2.x, langchain-groq via `init_chat_model`, PyMongo async client, sse-starlette, Jinja2, mitreattack-python
+- ML/NLP: scikit-learn (IsolationForest anomaly model; TF-IDF + LogisticRegression injection classifier), artifacts in `data/models/`
 - LLM: Groq, default `openai/gpt-oss-120b`, set via `LLM_PROVIDER` / `LLM_MODEL` in `.env`
 - DB: MongoDB 7 in docker compose. Db `telemetry` (read through user `telemetry_reader`, read-only) and db `triage` (user `app`)
 - Frontend: Next.js App Router, TypeScript, Tailwind, shadcn/ui
@@ -17,7 +18,8 @@ Check current docs before using an API you're unsure about, especially LangGraph
 Development is on Windows. No `make`; tasks run through a plain-Python `tasks.py` at the repo root (no extra dependencies).
 
 - `python tasks.py up` / `python tasks.py down` — start / stop MongoDB (Docker Desktop)
-- `python tasks.py seed` — generate and load telemetry (seed 42, variant 1)
+- `python tasks.py seed` — generate and load telemetry (seed 42, variant 1); trains the models if their artifacts are missing
+- `python tasks.py train` — train the anomaly model (baseline seed 7, background only) and the injection classifier
 - `python tasks.py test` — backend tests
 - `python tasks.py lint` — ruff
 - `python tasks.py dev-api` — FastAPI on :8000
@@ -43,6 +45,8 @@ Windows notes: use `pathlib` for paths, never hard-coded `/` or `\`; keep shell-
 ## Files you don't open
 
 `scenarios/s07_full_chain.py`, `scenarios/s12_injection_note.py` and `scenarios/scenario_text.yaml` are maintained by hand outside Claude Code. Don't read, edit or print them, and don't print raw tool output, agent transcripts or decoded command lines for scenario s12. They're covered by tests through `CLAIM_ORDER`; when debugging, use s01-s11. Stage them with `git add` without opening them.
+
+Never print rows from `data/datasets/`, only counts and metrics.
 
 ## How to work
 

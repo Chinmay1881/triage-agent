@@ -1,0 +1,20 @@
+{
+  "dataset": "deepset/prompt-injections",
+  "source": "https://huggingface.co/datasets/deepset/prompt-injections",
+  "revision": "4f61ecb038e9c3fb77e21034b22511b523772cdd",
+  "license": "apache-2.0",
+  "fetched": "2026-11-04",
+  "label": "1 = prompt injection, 0 = benign",
+  "splits": {
+    "train": {
+      "rows": 546,
+      "injections": 203,
+      "sha256": "4294fcbd0ce2b543675076e8d42707f129992929a6bec91d961f2e96b0d5ceb7"
+    },
+    "test": {
+      "rows": 116,
+      "injections": 60,
+      "sha256": "de0996d15cabd838d50a4925a8493062ba70c29f845601cd6a17412236614486"
+    }
+  }
+}

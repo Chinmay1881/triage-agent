@@ -6,7 +6,7 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "RUF"]
 
 [lint.isort]
-known-first-party = ["app", "scenarios", "scripts"]
+known-first-party = ["app", "evals", "scenarios", "scripts"]
 
 [lint.per-file-ignores]
 # S603: the determinism test runs the generator in subprocesses.
@@ -14,5 +14,7 @@ known-first-party = ["app", "scenarios", "scripts"]
 # S311: the generator wants seeded, reproducible randomness, not cryptographic randomness.
 "scripts/**" = ["S311"]
 "scenarios/**" = ["S311"]
+# The Prompt Guard comparison samples background texts with a fixed seed.
+"evals/**" = ["S311"]
 # tasks.py exists to run fixed developer commands (docker, uv) via subprocess.
 "tasks.py" = ["S603", "S607"]

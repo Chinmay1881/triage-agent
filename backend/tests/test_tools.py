@@ -1,4 +1,4 @@
-"""The 11 investigation tools: caps, validation, error handling, and results on scenario
+"""The 12 investigation tools: caps, validation, error handling, and results on scenario
 data. Pure tests run anywhere; the rest need Mongo and load variant 1 first."""
 
 from collections.abc import Iterator
@@ -9,6 +9,9 @@ import pytest
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.database import Database
 
+from app.ml import ModelMissingError
+from app.ml import anomaly as anomaly_model_module
+from app.telemetry.decode import UNDECODABLE, decode_encoded_command
 from app.tools import TOOLS, call_tool, langchain_tools
 from app.tools._common import (
     CMDLINE_CHARS,
@@ -18,7 +21,6 @@ from app.tools._common import (
     estimate_tokens,
     list_result,
 )
-from app.tools._decode import UNDECODABLE, decode_encoded_command
 from app.tools.process import process_row
 from scripts.gen.dataset import Dataset
 from scripts.gen.scenario import ScenarioResult, encode_powershell
@@ -34,8 +36,8 @@ def scenario(ds: Dataset, scenario_id: str) -> ScenarioResult:
 # --- pure: no database -------------------------------------------------------------------
 
 
-def test_eleven_tools_with_descriptions() -> None:
-    assert len(TOOLS) == 11
+def test_twelve_tools_with_descriptions() -> None:
+    assert len(TOOLS) == 12
     tools = langchain_tools(db=None)  # type: ignore[arg-type]
     assert sorted(t.name for t in tools) == sorted(TOOLS)
     assert all(len(t.description) > 60 for t in tools)
@@ -136,6 +138,11 @@ def test_filters_are_escaped_not_regex() -> None:
             {"host": "FIN-WS-01", "around": ALERT_TS, "remote_ip": "x"},
             "remote_ip",
         ),
+        ("score_anomaly", {"event_ids": []}, "at least 1 item"),
+        ("score_anomaly", {"event_ids": [f"evt_{i:06d}" for i in range(1, 12)]}, "at most 10"),
+        ("score_anomaly", {"event_ids": ["evt_000001", "evt_000001"]}, "must not repeat"),
+        ("score_anomaly", {"event_ids": ["evt_1"]}, "event_ids.0"),
+        ("score_anomaly", {"event_ids": "evt_000001"}, "valid list"),
     ],
 )
 async def test_bad_inputs_return_clear_errors(
@@ -151,6 +158,19 @@ async def test_unknown_tool_is_an_error() -> None:
     result = await call_tool("run_shell", {"cmd": "whoami"}, db=None)  # type: ignore[arg-type]
 
     assert "unknown tool" in result["error"]
+
+
+async def test_score_anomaly_without_model_says_how_to_train(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing() -> None:
+        raise ModelMissingError("anomaly model not trained; run `python tasks.py train`")
+
+    monkeypatch.setattr(anomaly_model_module, "load", missing)
+
+    result = await call_tool("score_anomaly", {"event_ids": ["evt_000001"]}, db=None)  # type: ignore[arg-type]
+
+    assert "python tasks.py train" in result["error"]
 
 
 async def test_attack_tools_use_pinned_catalog() -> None:
@@ -428,3 +448,34 @@ async def test_process_tree_resolves_reused_pid_by_time(
     early = before["untrusted_log_data"]
     assert early["process"]["name"] == "OUTLOOK.EXE"
     assert "calc.exe" not in [d["name"] for d in early["descendants"]]
+
+
+@pytest.mark.mongo
+async def test_score_anomaly_scores_explains_and_caps(
+    ds: Dataset,
+    tools_db: AsyncDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+    anomaly_model: anomaly_model_module.AnomalyModel,
+) -> None:
+    monkeypatch.setattr(anomaly_model_module, "load", lambda: anomaly_model)
+    trigger = scenario(ds, "s01").alert.triggers[0].event_id
+    others = [
+        e.event_id
+        for e in ds.events
+        if e.event_type in ("process_start", "network_conn") and e.event_id != trigger
+    ]
+    logon = next(e.event_id for e in ds.events if e.event_type == "logon")
+    found = [trigger, *others[:7], logon]
+
+    result = await call_tool("score_anomaly", {"event_ids": [*found, "evt_999999"]}, tools_db)
+
+    rows = result["untrusted_log_data"]
+    assert [r["event_id"] for r in rows] == found
+    assert result["not_found"] == ["evt_999999"]
+    assert all_results_capped(result)
+    for row in rows[:8]:
+        assert 0 < row["score"] < 1 and 0 <= row["percentile"] <= 100
+        assert len(row["stood_out"]) == 3
+        assert {"feature", "value", "baseline_share"} == set(row["stood_out"][0])
+    assert "not scored" in rows[8]["note"]
+    assert rows[0]["percentile"] > 90

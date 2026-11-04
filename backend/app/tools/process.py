@@ -6,6 +6,7 @@ from typing import Any, Self
 from pydantic import Field, model_validator
 from pymongo.asynchronous.database import AsyncDatabase
 
+from app.telemetry.decode import decode_encoded_command
 from app.tools._common import (
     MAX_ROWS,
     EventId,
@@ -22,7 +23,6 @@ from app.tools._common import (
     iso,
     list_result,
 )
-from app.tools._decode import decode_encoded_command
 
 ACTIVITY_TYPES = ["file_write", "lsass_access", "scheduled_task"]
 MAX_ANCESTORS = 3

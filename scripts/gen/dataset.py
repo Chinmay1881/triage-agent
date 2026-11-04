@@ -21,6 +21,7 @@ from scenarios import (
     s12_injection_note,
 )
 from scripts.gen.background import generate_background
+from scripts.gen.core import World
 from scripts.gen.intel import build_intel
 from scripts.gen.safety import check_dataset
 from scripts.gen.scenario import Claims, Context, ScenarioResult
@@ -82,14 +83,18 @@ class Dataset:
         }
 
 
-def build_dataset(seed: int, variant: int) -> Dataset:
-    if variant not in VARIANTS:
-        raise ValueError(f"variant must be one of {VARIANTS}")
+def _world(seed: int) -> World:
     # Each stage gets its own string-seeded RNG, so adding events to one stage doesn't
     # shift the random stream of the others.
     world = build_world(random.Random(f"{seed}:world"))
     generate_background(world, random.Random(f"{seed}:background"))
+    return world
 
+
+def build_dataset(seed: int, variant: int) -> Dataset:
+    if variant not in VARIANTS:
+        raise ValueError(f"variant must be one of {VARIANTS}")
+    world = _world(seed)
     claims = Claims()
     results = []
     for module in CLAIM_ORDER:
@@ -97,7 +102,16 @@ def build_dataset(seed: int, variant: int) -> Dataset:
         claims.add(result)
         results.append(result)
     results.sort(key=lambda r: r.scenario_id)
+    return _assemble(world, results)
 
+
+def build_background(seed: int) -> Dataset:
+    """A week of normal activity only: no scenarios, no alerts, no truth. The anomaly model's
+    baseline comes from this, with a seed other than the eval week's."""
+    return _assemble(_world(seed), [])
+
+
+def _assemble(world: World, results: list[ScenarioResult]) -> Dataset:
     # IDs are assigned only now, in time order, so injected events are indistinguishable
     # from background ones by ID. `seq` breaks ties so parents precede children.
     drafts = sorted(world.drafts, key=lambda d: (d.ts, d.seq))

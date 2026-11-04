@@ -1,6 +1,7 @@
-"""Hard rule 3, enforced: nothing under backend/app may import the generator or scenarios,
-or name the truth directory. pytest's pythonpath includes the repo root so tests can import
-scenarios/, which means only this test stops app code from doing the same."""
+"""Hard rule 3, enforced: nothing under backend/app (tools, agent, ml) may import the
+generator, the scenarios or the evals, or name the truth directory. pytest's pythonpath
+includes the repo root so tests can import scenarios/, which means only this test stops app
+code from doing the same."""
 
 import ast
 import re
@@ -9,11 +10,12 @@ from pathlib import Path
 import pytest
 
 APP = Path(__file__).resolve().parents[1] / "app"
-FORBIDDEN_PACKAGES = ("scripts", "scenarios")
+# evals/ is the one package that sees scenario membership and truth.
+FORBIDDEN_PACKAGES = ("scripts", "scenarios", "evals")
 # Either path separator, and the dynamic import forms an AST import check would miss.
 TRUTH_PATH = re.compile(r"scenarios[\\/]+truth", re.IGNORECASE)
 DYNAMIC_IMPORT = re.compile(
-    r"(?:import_module|__import__)\(\s*[\"'](?:scripts|scenarios)(?:[.\"'])"
+    r"(?:import_module|__import__)\(\s*[\"'](?:scripts|scenarios|evals)(?:[.\"'])"
 )
 
 APP_FILES = sorted(p for p in APP.rglob("*") if p.is_file() and p.suffix != ".pyc")
@@ -36,6 +38,11 @@ def test_app_files_found() -> None:
     assert any(p.suffix == ".py" for p in APP_FILES)
 
 
+def test_ml_package_is_scanned() -> None:
+    ml = {p.name for p in APP_FILES if p.parent == APP / "ml"}
+    assert {"__init__.py", "anomaly.py", "injection.py"} <= ml
+
+
 @pytest.mark.parametrize("path", APP_FILES, ids=lambda p: p.relative_to(APP).as_posix())
 def test_app_never_touches_scenarios_or_truth(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
@@ -54,6 +61,7 @@ def test_app_never_touches_scenarios_or_truth(path: Path) -> None:
         "from scripts.gen import dataset",
         "from scenarios import s01_phishing_powershell",
         "def f():\n    import scripts.load\n",
+        "from evals.ml_anomaly import evaluate",
     ],
 )
 def test_detects_forbidden_imports(source: str) -> None:
@@ -67,6 +75,7 @@ def test_detects_forbidden_imports(source: str) -> None:
         r'Path("scenarios\\truth")',
         'importlib.import_module("scenarios.s01_phishing_powershell")',
         '__import__("scripts.gen")',
+        'importlib.import_module("evals.common")',
     ],
 )
 def test_detects_truth_paths_and_dynamic_imports(text: str) -> None:

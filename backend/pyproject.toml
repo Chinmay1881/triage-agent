@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-settings>=2.16.2",
     "pymongo>=4.19.0",
     "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
     "sse-starlette>=3.6.0",
     "stix2>=3.0.2",
     "uvicorn>=0.54.0",

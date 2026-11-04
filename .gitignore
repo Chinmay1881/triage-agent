@@ -15,6 +15,10 @@ node_modules/
 # Regenerated from the seed by `python tasks.py seed`
 data/generated/
 scenarios/truth/
+# Background-only baseline week (generate.py --background-only) and trained models
+# (`python tasks.py train`)
+data/baseline/
+data/models/
 
 # Editors / OS
 .vscode/
