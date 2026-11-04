@@ -6,12 +6,18 @@ lines, and whether s12's trigger is flagged.
 - precision / recall / F1 on the test split of deepset/prompt-injections;
 - false-positive rate over every cmdline and decoded -EncodedCommand text of the eval week's
   background process starts (each occurrence counts; distinct texts are scored once);
+- false-positive rate on two sets of hand-written benign command lines full of ordinary
+  English, plus the 3 highest-scoring lines of each. Neither is ever trained on. hard_1
+  (evals/data/benign_cmdlines_hard.txt) was seen while diagnosing false positives; hard_2
+  (benign_cmdlines_hard_2.txt) was written before the benign-English training templates
+  and is the held-out number;
 - s12_trigger_flagged: every trigger event of s12's alert has its command line or decoded
   text flagged. A boolean only: s12's text is never printed or written.
 
 --prompt-guard adds the same metrics for Llama Prompt Guard 2 (86M) on Groq, on at most
---limit texts: s12's trigger texts, the full test split, then a fixed-seed sample of up to
-200 distinct background command lines. Skipped without GROQ_API_KEY or with LLM_MODE=mock.
+--limit texts: s12's trigger texts, the full test split, both hard sets, then a fixed-seed
+sample of up to 200 distinct background command lines. Skipped without GROQ_API_KEY or
+with LLM_MODE=mock.
 Writes evals/results/injection_<date>.json; prints metrics only.
 """
 
@@ -47,8 +53,14 @@ PROMPT_GUARD_CHARS = 1500
 BACKGROUND_SAMPLE = 200
 SAMPLE_SEED = 0
 DEFAULT_LIMIT = 320
+HARD_SETS = {
+    "hard_1": ROOT / "evals" / "data" / "benign_cmdlines_hard.txt",
+    "hard_2": ROOT / "evals" / "data" / "benign_cmdlines_hard_2.txt",
+}
+WORST = 3
 
-Flagger = Callable[[Sequence[str]], list[bool]]
+# Texts -> probabilities that each is an injection.
+Scorer = Callable[[Sequence[str]], list[float]]
 
 
 def process_texts(cmdline: str) -> list[str]:
@@ -76,18 +88,34 @@ def trigger_texts(ds: Dataset) -> list[list[str]]:
     return out
 
 
+def read_hard_set(path: Path) -> list[str]:
+    lines = (line.strip() for line in path.read_text(encoding="utf-8").splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def read_hard_sets() -> dict[str, list[str]]:
+    return {name: read_hard_set(path) for name, path in HARD_SETS.items()}
+
+
 @dataclass
 class EvalTexts:
     test_texts: list[str]
     test_labels: list[int]
+    hard_sets: dict[str, list[str]]
     background: Counter[str]
     triggers: list[list[str]]
 
 
-def evaluate(flags: Flagger, data: EvalTexts) -> dict[str, Any]:
+def evaluate(score: Scorer, threshold: float, data: EvalTexts) -> dict[str, Any]:
     distinct = sorted(data.background)
-    all_texts = [*data.test_texts, *distinct, *(t for ts in data.triggers for t in ts)]
-    flagged = dict(zip(all_texts, flags(all_texts), strict=True))
+    all_texts = [
+        *data.test_texts,
+        *(t for texts in data.hard_sets.values() for t in texts),
+        *distinct,
+        *(t for ts in data.triggers for t in ts),
+    ]
+    scores = dict(zip(all_texts, score(all_texts), strict=True))
+    flagged = {text: p >= threshold for text, p in scores.items()}
 
     predicted = [flagged[t] for t in data.test_texts]
     precision, recall, f1, _ = precision_recall_fscore_support(
@@ -95,7 +123,7 @@ def evaluate(flags: Flagger, data: EvalTexts) -> dict[str, Any]:
     )
     total = sum(data.background.values())
     false_positives = sum(n for text, n in data.background.items() if flagged[text])
-    return {
+    result: dict[str, Any] = {
         "test_rows": len(data.test_texts),
         "precision": round(float(precision), 4),
         "recall": round(float(recall), 4),
@@ -106,36 +134,52 @@ def evaluate(flags: Flagger, data: EvalTexts) -> dict[str, Any]:
         "s12_trigger_flagged": bool(data.triggers)
         and all(any(flagged[t] for t in ts) for ts in data.triggers),
     }
+    for name, texts in data.hard_sets.items():
+        worst = sorted(texts, key=lambda t: scores[t], reverse=True)[:WORST]
+        result[name] = {
+            "lines": len(texts),
+            "false_positive_rate": round(sum(flagged[t] for t in texts) / len(texts), 4),
+            # Hand-written benign text, safe to show; never anything from the dataset or s12.
+            "worst": [{"score": round(scores[t], 4), "text": t} for t in worst],
+        }
+    return result
 
 
 def full_eval_texts(ds: Dataset) -> EvalTexts:
     texts, labels = fetch_datasets.read_split("test")
-    return EvalTexts(texts, labels, background_texts(ds), trigger_texts(ds))
+    return EvalTexts(texts, labels, read_hard_sets(), background_texts(ds), trigger_texts(ds))
 
 
 def limited_eval_texts(data: EvalTexts, limit: int) -> EvalTexts:
-    """Trigger texts first, then the test split, then a fixed-seed background sample."""
+    """Trigger texts first, then the test split, the hard negatives, and a fixed-seed
+    background sample, until `limit` texts."""
     triggers, budget = [], limit
     for ts in data.triggers:
         triggers.append(ts[:budget])
         budget -= len(triggers[-1])
     test_n = min(len(data.test_texts), budget)
     budget -= test_n
+    hard = {}
+    for name, texts in data.hard_sets.items():
+        hard[name] = texts[:budget]
+        budget -= len(hard[name])
     sample_n = min(BACKGROUND_SAMPLE, budget, len(data.background))
     sample = random.Random(SAMPLE_SEED).sample(sorted(data.background), sample_n)
-    return EvalTexts(data.test_texts[:test_n], data.test_labels[:test_n], Counter(sample), triggers)
+    return EvalTexts(
+        data.test_texts[:test_n], data.test_labels[:test_n], hard, Counter(sample), triggers
+    )
 
 
 class PromptGuardError(RuntimeError):
     pass
 
 
-def prompt_guard_flagger(api_key: str) -> Flagger:
+def prompt_guard_scorer(api_key: str) -> Scorer:
     model = init_chat_model(
         PROMPT_GUARD, model_provider="groq", temperature=0, max_retries=6, api_key=api_key
     )
 
-    def flags(texts: Sequence[str]) -> list[bool]:
+    def score(texts: Sequence[str]) -> list[float]:
         out = []
         for text in texts:
             reply = model.invoke(text[:PROMPT_GUARD_CHARS]).content
@@ -145,10 +189,10 @@ def prompt_guard_flagger(api_key: str) -> Flagger:
                 probability = float(str(reply).strip())
             except ValueError:
                 raise PromptGuardError("reply was not a probability") from None
-            out.append(probability >= PROMPT_GUARD_THRESHOLD)
+            out.append(probability)
         return out
 
-    return flags
+    return score
 
 
 def groq_key() -> str | None:
@@ -176,7 +220,7 @@ def main() -> int:
     result: dict[str, Any] = {
         "dataset_revision": fetch_datasets.read_manifest()["revision"],
         "threshold": round(model.threshold, 4),
-        "classifier": evaluate(lambda texts: list(model.scores(texts) >= model.threshold), data),
+        "classifier": evaluate(lambda texts: model.scores(texts).tolist(), model.threshold, data),
     }
     if args.prompt_guard:
         key = groq_key()
@@ -185,15 +229,26 @@ def main() -> int:
         else:
             try:
                 limited = limited_eval_texts(data, args.limit)
-                result["prompt_guard"] = evaluate(prompt_guard_flagger(key), limited)
+                result["prompt_guard"] = evaluate(
+                    prompt_guard_scorer(key), PROMPT_GUARD_THRESHOLD, limited
+                )
             except PromptGuardError as exc:
                 result["prompt_guard"] = {"skipped": str(exc)}
     path = write_result("injection", result)
 
     print(f"threshold {result['threshold']} (chosen on the train split)")
     for name in ("classifier", "prompt_guard"):
-        if name in result:
-            print(f"  {name:<11} {result[name]}")
+        if name not in result:
+            continue
+        metrics = result[name]
+        summary = {k: v for k, v in metrics.items() if k not in HARD_SETS}
+        print(f"  {name:<12} {summary}")
+        for hard_name in HARD_SETS:
+            if hard_name in metrics:
+                hard = metrics[hard_name]
+                print(f"    {hard_name}: FP rate {hard['false_positive_rate']} on {hard['lines']}")
+                for row in hard["worst"]:
+                    print(f"      {row['score']:.3f}  {row['text']}")
     print(f"wrote {path}")
     return 0
 

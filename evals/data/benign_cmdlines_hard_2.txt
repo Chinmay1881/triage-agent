@@ -1,0 +1,44 @@
+# Held-out hard negatives: hand-written benign command lines with ordinary English, written
+# before the benign-English training generator and never edited afterwards. Different tools
+# and wording from benign_cmdlines_hard.txt. Never trained on.
+# One command line per line; lines starting with # are comments.
+svn.exe commit -m "Tidy up the deployment guide so new joiners can follow it without help"
+hg.exe commit -m "Drop the legacy prompt banner from the login screen"
+terraform.exe apply -var="environment_note=Staging stack, safe to destroy on Fridays" -auto-approve
+kubectl.exe annotate deployment web-frontend note="Rolled back after the system test failed overnight"
+az.exe vm update -g rg-finance -n FIN-VM-02 --set tags.purpose="Payroll exports, ask Hannah before changing anything"
+aws.exe s3 cp report.csv s3://corp-reports-example/weekly/ --metadata comment="Weekly figures for the sales team"
+choco.exe install notepadplusplus -y --params "'/NoDesktopShortcut'" --log-file="C:\Logs\Chocolatey - editor install for design team.log"
+pip.exe install --upgrade requests --log "C:\Logs\pip - routine upgrade, nothing to worry about.log"
+mvn.cmd release:prepare -DscmCommentPrefix="[release] bump version and refresh the changelog"
+dotnet.exe publish -c Release -p:Product="Expense Tracker" -p:Description="Lets staff submit receipts from their phone"
+pandoc.exe "Onboarding guide.md" -o "Onboarding guide.pdf" --metadata title="How to set up your laptop on day one"
+wevtutil.exe epl Application "C:\Logs\Application events - kept for the quarterly audit.evtx"
+xcopy.exe "C:\Templates\Letters" "\\FS-01\Shared\Letters" /E /I /Y /EXCLUDE:C:\Templates\skip-these-drafts.txt
+setx.exe SUPPORT_NOTE "Override the proxy only when IT asks you to"
+powershell.exe -Command "Add-Content -Path C:\Logs\deploy.log -Value 'Step 3 of 5: copying files, this can take a few minutes'"
+powershell.exe -Command "Set-Content -Path C:\Kiosk\welcome.txt -Value 'Welcome to reception. Please sign the visitor book.'"
+powershell.exe -Command "Read-Host -Prompt 'Type the asset tag printed under the keyboard'"
+powershell.exe -Command "Register-ScheduledTask -TaskName 'Clear Downloads' -Description 'Deletes files older than 30 days from the shared Downloads folder' -Action (New-ScheduledTaskAction -Execute cleanmgr.exe)"
+powershell.exe -Command "Start-Process notepad.exe -ArgumentList 'C:\Docs\How to request annual leave.txt'"
+choice.exe /c YN /m "Apply the new printer settings to every user on this machine"
+cmd.exe /c title Monthly close - leave this window open until it says done
+timeout.exe /t 30 /nobreak
+sc.exe description CorpSync "Keeps shared calendars in step between Outlook and the intranet"
+logman.exe create counter DiskWatch -c "\LogicalDisk(*)\% Free Space" -o "C:\PerfLogs\Disk space check for the file server"
+mysqldump.exe --comments --result-file="D:\Dumps\crm - nightly copy before the system upgrade.sql" crm
+pg_dump.exe -d inventory -f "D:\Dumps\inventory - snapshot for the new reporting tool.sql"
+ssh.exe deploy@WEB-01 "echo Release 4.2 is live, thanks everyone"
+scp.exe "C:\Builds\manual.pdf" deploy@WEB-01:/var/www/docs/"user-manual-latest.pdf"
+java.exe -jar reports.jar --banner "Quarterly report generator - follow the prompts below"
+signtool.exe sign /a /d "Corp Expense Tracker" /du "https://intranet.corp.example/apps/expenses" ExpenseTracker.exe
+pyinstaller.exe --name "Room Booker" --icon room.ico --noconsole room_booker.py
+makensis.exe /DPRODUCT_NAME="Visitor Badge Printer" /DWELCOME_TEXT="This wizard will guide you through the setup" installer.nsi
+code.cmd --goto "C:\Projects\handbook\chapters\03-ignore-files-and-folders.md:12"
+"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE" /c ipm.note /m "helpdesk@corp.example?subject=Monitor flickering on desk 14"
+"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE" "C:\Users\ravi.p\Documents\Act as reviewer - budget comments.xlsx"
+rename.com "C:\Scans\scan0001.pdf" "Signed agreement - forget the old version.pdf"
+wsl.exe -e bash -c "echo 'Nightly tests passed on the build machine'"
+ping.exe -n 4 PRINT-02
+nslookup.exe intranet.corp.example
+certreq.exe -submit -attrib "CertificateTemplate:WebServer" "C:\Certs\request for the new system status page.req"

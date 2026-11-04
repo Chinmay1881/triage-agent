@@ -79,7 +79,7 @@ def anomaly_model() -> anomaly.AnomalyModel:
 
 @pytest.fixture(scope="session")
 def injection_model() -> injection.InjectionModel:
-    return injection.train(*injection_training_data(baseline_week()))
+    return injection.train(*injection_training_data(baseline_week(), BASELINE_SEED))
 
 
 @pytest.fixture(scope="session")

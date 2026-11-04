@@ -16,8 +16,15 @@ import pytest
 from app.ml import anomaly, injection
 from evals.ml_anomaly import evaluate as evaluate_anomaly
 from evals.ml_anomaly import precision_at_k, rule_score
-from evals.ml_injection import EvalTexts, full_eval_texts, limited_eval_texts, trigger_texts
+from evals.ml_injection import (
+    EvalTexts,
+    full_eval_texts,
+    limited_eval_texts,
+    read_hard_sets,
+    trigger_texts,
+)
 from evals.ml_injection import evaluate as evaluate_injection
+from scripts.gen.benign_english import benign_english_cmdlines
 from scripts.gen.dataset import Dataset
 from scripts.train import injection_training_data
 from tests.conftest import BASELINE_SEED, baseline_docs, baseline_week
@@ -116,7 +123,7 @@ def test_anomaly_roc_auc_above_0_8(
 
 
 def test_injection_training_is_deterministic(injection_model: injection.InjectionModel) -> None:
-    again = injection.train(*injection_training_data(baseline_week()))
+    again = injection.train(*injection_training_data(baseline_week(), BASELINE_SEED))
 
     assert again.threshold == injection_model.threshold
     assert np.array_equal(again.pipeline[-1].coef_, injection_model.pipeline[-1].coef_)
@@ -142,15 +149,19 @@ def test_classifier_flags_s12_trigger(
 def injection_eval(
     injection_model: injection.InjectionModel, datasets: dict[int, Dataset]
 ) -> dict[str, Any]:
-    def flags(texts: list[str]) -> list[bool]:
-        return list(injection_model.scores(texts) >= injection_model.threshold)
+    def scores(texts: list[str]) -> list[float]:
+        return injection_model.scores(texts).tolist()
 
-    return evaluate_injection(flags, full_eval_texts(datasets[1]))
+    return evaluate_injection(scores, injection_model.threshold, full_eval_texts(datasets[1]))
 
 
-def test_classifier_false_positive_rate_on_background(injection_eval: dict[str, Any]) -> None:
-    assert injection_eval["background_texts"] > 1000
-    assert injection_eval["background_false_positive_rate"] < 0.02
+def test_classifier_false_positive_rate_on_held_out_hard_set(
+    injection_eval: dict[str, Any],
+) -> None:
+    # hard_2 was written before the benign-English templates and is never trained on; the
+    # generated background is too close to the training data to be a fair test.
+    assert injection_eval["hard_2"]["lines"] == 40
+    assert injection_eval["hard_2"]["false_positive_rate"] <= 0.10
 
 
 def test_injection_eval_reports_s12_as_boolean(injection_eval: dict[str, Any]) -> None:
@@ -161,12 +172,39 @@ def test_limited_texts_respect_limit() -> None:
     data = EvalTexts(
         test_texts=[f"q{i}" for i in range(116)],
         test_labels=[i % 2 for i in range(116)],
+        hard_sets={"hard_1": [f"h{i}" for i in range(42)], "hard_2": [f"k{i}" for i in range(40)]},
         background=Counter({f"cmd{i}": 1 for i in range(500)}),
         triggers=[["a", "b"]],
     )
 
     limited = limited_eval_texts(data, 300)
 
-    sent = len(limited.test_texts) + len(limited.background) + sum(map(len, limited.triggers))
-    assert sent == 300 and len(limited.test_texts) == 116 and len(limited.background) == 182
+    hard = sum(map(len, limited.hard_sets.values()))
+    sent = len(limited.test_texts) + hard + len(limited.background) + 2
+    assert sent == 300 and len(limited.test_texts) == 116 and hard == 82
+    assert len(limited.background) == 100
     assert len(limited_eval_texts(data, 1000).background) == 200
+
+
+# --- benign-English training rows --------------------------------------------------------
+
+
+def normalised(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def test_benign_english_is_deterministic_and_distinct() -> None:
+    lines = benign_english_cmdlines(BASELINE_SEED)
+
+    assert lines == benign_english_cmdlines(BASELINE_SEED)
+    assert len(lines) == len(set(lines)) == 400
+    words = " ".join(lines).lower()
+    assert all(w in words for w in ("instructions", "prompt", "system", "ignore", "override"))
+
+
+def test_benign_english_never_overlaps_hard_sets() -> None:
+    generated = {normalised(t) for t in benign_english_cmdlines(BASELINE_SEED)}
+
+    for name, texts in read_hard_sets().items():
+        overlap = [t for t in texts if normalised(t) in generated]
+        assert overlap == [], name

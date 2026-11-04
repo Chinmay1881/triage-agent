@@ -7,10 +7,12 @@ scenarios, no truth). The eval week is seed 42, so that seed is refused: a model
 it would have seen the events it is scored on.
 
 The injection classifier trains on the train split of data/datasets/prompt_injections/
-(fetched first if missing) plus the baseline week's distinct command lines as benign rows.
-deepset's benign rows are questions, so without them the classifier has never seen an
-ordinary command line, and quotes and dashes alone push one toward "injection". Prints counts
-and the chosen threshold only, never rows.
+(fetched first if missing) plus two kinds of benign rows: the baseline week's distinct
+command lines, and templated command lines with ordinary English in them
+(scripts/gen/benign_english.py). deepset's benign rows are questions, so without the first
+the classifier has never seen a command line, and without the second any English phrase in
+one ("update the install instructions") looks like an injection. The hard-negative files in
+evals/data/ are never used here. Prints counts and the chosen threshold only, never rows.
 """
 
 import argparse
@@ -23,6 +25,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "backend")]
 from app.ml import anomaly, injection  # noqa: E402
 from app.telemetry.decode import decode_encoded_command  # noqa: E402
 from scripts import fetch_datasets  # noqa: E402
+from scripts.gen.benign_english import benign_english_cmdlines  # noqa: E402
 from scripts.gen.dataset import Dataset, build_background  # noqa: E402
 
 EVAL_SEED = 42
@@ -46,11 +49,11 @@ def benign_cmdlines(baseline: Dataset) -> list[str]:
     return sorted(texts)
 
 
-def injection_training_data(baseline: Dataset) -> tuple[list[str], list[int]]:
+def injection_training_data(baseline: Dataset, seed: int) -> tuple[list[str], list[int]]:
     if not fetch_datasets.is_fetched() and fetch_datasets.main() != 0:
         raise RuntimeError("could not fetch the prompt-injection dataset")
     texts, labels = fetch_datasets.read_split("train")
-    benign = benign_cmdlines(baseline)
+    benign = [*benign_cmdlines(baseline), *benign_english_cmdlines(seed)]
     return [*texts, *benign], [*labels, *[0] * len(benign)]
 
 
@@ -67,7 +70,7 @@ def main() -> int:
     sizes = {t: len(m.sorted_scores) for t, m in model.models.items()}
     print(f"anomaly: baseline seed {args.seed}, {sizes}, wrote {anomaly.ARTIFACT}")
 
-    texts, labels = injection_training_data(baseline)
+    texts, labels = injection_training_data(baseline, args.seed)
     classifier = injection.train(texts, labels)
     injection.save(classifier)
     print(
