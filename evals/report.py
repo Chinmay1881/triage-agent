@@ -93,6 +93,7 @@ def aggregate(records: list[RunRecord]) -> dict[str, Any]:
             "report_validator_refusals": sum(r.validator_refusals for r in records),
             "report_actions_dropped": sum(r.actions_dropped for r in records),
             "report_downgrades": sum(r.downgrades for r in records),
+            "known_bad_runs": sum(r.known_bad_in_case > 0 for r in records),
         },
         "cost": {
             "tokens_by_model": dict(sorted(tokens.items())),
@@ -170,6 +171,11 @@ def notes(by_config: dict[str, list[RunRecord]]) -> list[str]:
                 lines.append(f"FAIL {label}: {failure}" + (f"; {details}." if details else "."))
             elif _weak(r):
                 lines.append(f"WEAK {label}: passed the verdict, but {details}.")
+            if r.downgrade_reasons:
+                lines.append(
+                    f"DOWNGRADED {label}: benign changed to suspicious "
+                    f"({', '.join(r.downgrade_reasons)})."
+                )
             if r.llm_failures:
                 lines.append(
                     f"DEGRADED {label}: {r.llm_failures} LLM call(s) failed; a code "
@@ -270,6 +276,7 @@ AGENT_ROWS = [
         None,
     ),
     ("CyberIntel-Agent", "known_bad found", "intel_known_bad_found", "intel_known_bad"),
+    ("CyberIntel-Agent", "Runs with a known_bad indicator", "known_bad_runs", None),
     ("Investigator-Agent", "Budget used (mean share)", "investigator_budget_share", None),
     ("Investigator-Agent", "Findings per run", "investigator_findings", None),
     ("Investigator-Agent", "Grounding: findings dropped", "investigator_findings_dropped", None),

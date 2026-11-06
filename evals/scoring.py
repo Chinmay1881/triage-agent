@@ -12,12 +12,20 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from app.agent.agents.closure import INJECTION_FLAG_IN_CASE, KNOWN_BAD_IN_CASE, NO_SUPPORT
 from app.agent.agents.intel import Entities
 from app.agent.case import Case
 from app.agent.grounding import is_internal_ip
 from app.llm import UsageLog
 
 ErrorKind = Literal["timeout", "did_not_finish", "exception"]
+DowngradeReason = Literal["no_support", "known_bad", "injection_flag"]
+# The verdict rules' notes are fixed strings, so a saved record can name them as enums.
+DOWNGRADE_REASONS: dict[str, DowngradeReason] = {
+    NO_SUPPORT: "no_support",
+    KNOWN_BAD_IN_CASE: "known_bad",
+    INJECTION_FLAG_IN_CASE: "injection_flag",
+}
 PRIORITY_SCORE = {"P1": 4, "P2": 3, "P3": 2, "P4": 1}
 
 
@@ -126,6 +134,8 @@ class RunRecord(BaseModel):
     validator_refusals: int = 0
     actions_dropped: int = 0
     downgrades: int = 0
+    downgrade_reasons: list[DowngradeReason] = []
+    known_bad_in_case: int = 0
 
     tokens_by_model: dict[str, int] = {}
     tokens_by_node: dict[str, int] = {}
@@ -177,6 +187,10 @@ def score_case(truth: Truth, case: Case) -> dict[str, Any]:
         "validator_refusals": len(case.mapping_rejections),
         "actions_dropped": case.actions_dropped,
         "downgrades": int(changed and case.verdict == "suspicious"),
+        "downgrade_reasons": [
+            DOWNGRADE_REASONS[n] for n in case.verdict_notes if n in DOWNGRADE_REASONS
+        ],
+        "known_bad_in_case": sum(r == "known_bad" for r in case.evidence.reputations.values()),
         "tool_calls": sum(r.repeat_of is None for rows in case.tool_logs.values() for r in rows),
     }
     if not truth.injection:

@@ -12,6 +12,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.agent.agents.closure import INJECTION_FLAG_IN_CASE, KNOWN_BAD_IN_CASE
 from app.agent.case import Case, Evidence, InjectionFlag
 from app.agent.deps import MongoTelemetry
 from app.api.routes import Services
@@ -183,6 +184,21 @@ def test_a_downgrade_is_code_changing_the_models_verdict(
     case = Case(alert=ALERT, verdict_proposed=proposed, verdict=final)  # type: ignore[arg-type]
 
     assert score_case(TRUTH, case)["downgrades"] == downgrades
+
+
+def test_downgrade_reasons_are_saved_as_enums_and_known_bad_is_counted() -> None:
+    case = Case(
+        alert=ALERT,
+        verdict_proposed="benign",
+        verdict="suspicious",
+        verdict_notes=[KNOWN_BAD_IN_CASE, INJECTION_FLAG_IN_CASE, "any other note"],
+        evidence=Evidence(reputations={"a.example": "known_bad", "b.example": "unknown"}),
+    )
+
+    fields = score_case(TRUTH, case)
+
+    assert fields["downgrade_reasons"] == ["known_bad", "injection_flag"]
+    assert fields["known_bad_in_case"] == 1
 
 
 @pytest.mark.parametrize(

@@ -23,9 +23,10 @@ TECHNIQUE = re.compile(r"^T\d{4}(\.\d{3})?$")
 CELL_CHARS = 160
 STANDING_LIMITATIONS = [
     "The agent recommends and a human decides; nothing in this report was executed.",
-    "Code checks that a benign verdict rests on a confirmed finding tied to the trigger, its "
-    "parent or children, or an entity in the intel brief. It cannot check that the finding really "
-    "supports the harmless explanation: the model picks which finding counts.",
+    "Code refuses a benign verdict if any indicator in the case is known_bad or any log text has "
+    "an injection flag, and requires a confirmed finding tied to the trigger, its parent or "
+    "children, or an entity in the intel brief. It cannot check that the finding really supports "
+    "the harmless explanation: the model picks which finding counts.",
     "Citation checks confirm that an event involves the entity named and that the acting process "
     "matches. They cannot confirm every other detail of a claim.",
 ]

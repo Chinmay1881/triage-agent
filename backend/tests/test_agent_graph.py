@@ -585,7 +585,14 @@ async def test_new_indicators_get_automatic_reputation_tagged_intel_rule() -> No
     net = tool_call("get_network_connections", host="FIN-WS-01")
     d, llm, _ = deps(
         {"investigate": [AIMessage("", tool_calls=[net]), DONE]},
-        {"get_network_connections": connections},
+        # Only the investigator's own call finds them: intel's enrichment asks per process.
+        {
+            "get_network_connections": lambda args: (
+                {"untrusted_log_data": [], "total": 0, "shown": 0}
+                if args.get("process_name")
+                else connections
+            )
+        },
     )
 
     state = (await run(d)).state

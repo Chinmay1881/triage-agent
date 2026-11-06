@@ -42,8 +42,13 @@ from langchain_core.messages import AIMessage, BaseMessage  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 from pymongo import MongoClient  # noqa: E402
 
-from app.agent.agents.intel import MAX_TREES, extract_entities  # noqa: E402
-from app.agent.case import Case  # noqa: E402
+from app.agent.agents.intel import (  # noqa: E402
+    MAX_TREES,
+    extract_entities,
+    network_calls,
+    network_indicators,
+)
+from app.agent.case import Case, Evidence  # noqa: E402
 from app.agent.deps import MongoTelemetry, ToolRunner  # noqa: E402
 from app.api.routes import Services  # noqa: E402
 from app.api.runner import Runner  # noqa: E402
@@ -172,9 +177,9 @@ ERROR_KINDS: dict[str, ErrorKind] = {
 async def intel_coverage(
     telemetry: Any, tool: ToolRunner, alert: Alert, case: Case | None
 ) -> IntelCoverage:
-    """How much of the trigger tree CyberIntel-Agent looked up. The harness fetches the tree and
-    the reputations itself, read-only and uncharged. The extraction is the rule intel.py applies,
-    so this measures what its caps and failures lost."""
+    """How much of the trigger tree and its network activity CyberIntel-Agent looked up. The
+    harness fetches all of it itself, read-only and uncharged. The extraction is the rule intel.py
+    applies, without its caps, so this measures what the caps and failures lost."""
     docs = await telemetry.events(alert.trigger_event_ids)
     trees = []
     for doc in docs[:MAX_TREES]:
@@ -183,6 +188,8 @@ async def intel_coverage(
             if isinstance(tree.get("untrusted_log_data"), dict):
                 trees.append(tree["untrusted_log_data"])
     wanted = tree_indicators(extract_entities(docs, trees))
+    for name, args in network_calls(alert, trees):
+        wanted |= dict(network_indicators([await tool(name, args)], Evidence()))
     logs = case.tool_logs.get(CYBERINTEL, []) if case else []
     looked_up = {
         str(r.args.get("indicator")).lower() for r in logs if r.name == "check_reputation" and r.ok

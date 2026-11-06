@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     intel_max_indicators: int = 20
     intel_max_hosts_users: int = 6
     intel_max_anomaly_events: int = 20
+    # Network enrichment: two calls per trigger-tree process, then reputation for what they found.
+    intel_max_network_processes: int = 8
+    intel_max_network_indicators: int = 20
     auto_reputation_per_call: int = 5
     # Exact repeat calls are answered from the ledger for free this many times per agent, then
     # they cost budget again, so a model repeating itself can't loop on free calls (hard rule 8).

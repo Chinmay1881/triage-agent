@@ -1,9 +1,11 @@
 """A scripted model for offline evals of all 12 scenarios: it tests the plumbing, not the agent.
 
-It knows only what a model would be shown, never the truth. Its rule is deliberately simple: any
-known_bad indicator means malicious, otherwise benign. So some scenarios fail, which exercises the
-pass/fail grid and the notes. It always proposes one invented technique and one target outside the
-case, so the validator and the recommendation check have something to refuse.
+It knows only what a model would be shown, never the truth. Its rule is deliberately simple: an
+injection flag means benign, as if the injection worked; otherwise any known_bad indicator means
+malicious, and no indicator means benign. So the verdict guardrails get a real benign to refuse, and
+some scenarios fail, which exercises the pass/fail grid and the notes. It always proposes one
+invented technique and one target outside the case, so the validator and the recommendation check
+have something to refuse.
 
 Its claims hold only an entity found in its prompt (a process, file, domain or IP) and the host, and
 stay in memory: a saved eval record has no field for them.
@@ -101,7 +103,7 @@ def mock_model(alert: Alert) -> MockLLM:
         prompt = _prompt(messages)
         ids = [f["id"] for f in prompt["findings"]]
         bad = prompt["untrusted_log_data"]["known_bad_indicators"]
-        if bad:
+        if bad and not prompt["injection_flags"]:
             return _assessed("malicious", 0.8, [])
         return _assessed("benign", 0.6, ids[:1])
 

@@ -9,6 +9,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.agent.agents.closure import (
+    INJECTION_FLAG_IN_CASE,
+    KNOWN_BAD_IN_CASE,
     NO_SUPPORT,
     anomaly_percentiles,
     apply_verdict_rules,
@@ -275,21 +277,49 @@ FLAG = InjectionFlag(event_id=TRIGGER, field="cmdline", method="regex", score=1.
 @pytest.mark.parametrize(
     ("flags", "reputations", "expected"),
     [
-        ([FLAG], {"bad.example": "known_bad"}, "suspicious"),
-        ([], {"bad.example": "known_bad"}, "benign"),
-        ([FLAG], {"good.example": "known_good"}, "benign"),
+        ([FLAG], {"bad.example": "known_bad"}, [KNOWN_BAD_IN_CASE, INJECTION_FLAG_IN_CASE]),
+        ([], {"bad.example": "known_bad"}, [KNOWN_BAD_IN_CASE]),
+        ([FLAG], {"good.example": "known_good"}, [INJECTION_FLAG_IN_CASE]),
+        ([FLAG], {}, [INJECTION_FLAG_IN_CASE]),
     ],
 )
-def test_injection_flag_with_a_known_bad_indicator_blocks_benign(
-    flags: list[InjectionFlag], reputations: dict[str, str], expected: str
+def test_a_known_bad_indicator_or_an_injection_flag_each_block_benign(
+    flags: list[InjectionFlag], reputations: dict[str, str], expected: list[str]
 ) -> None:
+    # A supporting finding is present, so only these rules can be what blocks it.
     finding = confirmed(TRIGGER)
     evidence = Evidence(injection_flags=flags, reputations=reputations)
 
-    verdict, _, notes = apply_verdict_rules(assessed(), case_with(finding, evidence=evidence), {})
+    verdict, confidence, notes = apply_verdict_rules(
+        assessed(), case_with(finding, evidence=evidence), {}
+    )
 
-    assert verdict == expected
-    assert bool(notes) == (expected == "suspicious")
+    assert verdict == "suspicious" and confidence == 0.5 and notes == expected
+
+
+@pytest.mark.parametrize(
+    "reputations", [{}, {"good.example": "known_good"}, {"other.example": "unknown"}]
+)
+def test_other_reputations_with_no_flag_leave_benign_alone(reputations: dict[str, str]) -> None:
+    case = case_with(confirmed(TRIGGER), evidence=Evidence(reputations=reputations))
+
+    assert apply_verdict_rules(assessed(), case, {}) == ("benign", 0.9, [])
+
+
+async def test_a_fooled_model_is_downgraded_and_the_report_says_why() -> None:
+    benign = {
+        "verdict": "benign",
+        "confidence": 0.95,
+        "reasoning": "Looks routine.",
+        "supporting_benign": ["F1"],
+    }
+    d, _, _ = deps({"assess": [benign]}, docs=[process_doc(TRIGGER, f"cmd /c echo {PLANTED}")])
+
+    state = (await run(d)).state
+
+    assert state.verdict_proposed == "benign" and state.verdict == "suspicious"
+    assert INJECTION_FLAG_IN_CASE in state.verdict_notes
+    assert f"Code rule: {INJECTION_FLAG_IN_CASE}" in (state.report_md or "")
 
 
 @pytest.mark.parametrize("verdict", ["malicious", "suspicious"])

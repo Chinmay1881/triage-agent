@@ -54,10 +54,8 @@ NO_SUPPORT = (
     "benign changed to suspicious: no confirmed finding supporting the harmless hypothesis cites "
     "the trigger, its parent, a child, or an entity in the intel brief"
 )
-INJECTION_AND_BAD = (
-    "benign not allowed: an injection flag exists and an indicator is known_bad; "
-    "changed to suspicious"
-)
+KNOWN_BAD_IN_CASE = "benign changed to suspicious: a known_bad indicator is in this case"
+INJECTION_FLAG_IN_CASE = "benign changed to suspicious: log text in this case has an injection flag"
 LOW_CONFIDENCE_AFTER_CHANGE = 0.5
 
 
@@ -152,9 +150,10 @@ def apply_verdict_rules(
     supporting = [by_id[i] for i in draft.supporting_benign if i in by_id]
     if not any(supports_harmless(f, case, docs) for f in supporting):
         notes.append(NO_SUPPORT)
-    known_bad = [i for i, rep in case.evidence.reputations.items() if rep == "known_bad"]
-    if case.evidence.injection_flags and known_bad:
-        notes.append(INJECTION_AND_BAD)
+    if "known_bad" in case.evidence.reputations.values():
+        notes.append(KNOWN_BAD_IN_CASE)
+    if case.evidence.injection_flags:
+        notes.append(INJECTION_FLAG_IN_CASE)
     if notes:
         return "suspicious", min(draft.confidence, LOW_CONFIDENCE_AFTER_CHANGE), notes
     return "benign", draft.confidence, []

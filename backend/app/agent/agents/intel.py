@@ -3,7 +3,9 @@
 Code does the certain part, with no LLM choice: fetch the trigger's process tree, extract every
 host, user, IP, domain and sha256 from the trigger, its parent and its children, and look them
 all up. So the parent's reputation is in the brief every time, not when the model thinks of it.
-The LLM may then make a few more calls and writes the assessment; the facts stay code-written.
+Then it fetches each tree process's connections and DNS queries and looks up every destination: a
+C2 address usually shows up only in network activity, never in the tree itself. The LLM may then
+make a few more calls and writes the assessment; the facts stay code-written.
 """
 
 import logging
@@ -26,12 +28,13 @@ from app.agent.deps import Deps
 from app.agent.grounding import FILE_NAME, IPV4, is_internal_ip, text_entities
 from app.agent.prompts.intel import INTEL, INTEL_BRIEF
 from app.agent.prompts.system import SYSTEM
-from app.agent.toolrun import run_call
+from app.agent.toolrun import IndicatorType, new_indicators, run_call
 from app.config import CYBERINTEL, INVESTIGATOR
 from app.llm import LLMError
 from app.telemetry.decode import decode_encoded_command
+from app.telemetry.models import Alert
 from app.tools import tool_specs
-from app.tools._common import cap_text
+from app.tools._common import cap_text, iso
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ ANOMALY_BATCH = 10
 CHAIN_CMDLINE_CHARS = 150
 EXTRA_LOOKUP_TOKENS = 1000
 NOT_DIRECTORY_USERS = {"system", "local service", "network service"}
+NETWORK_TOOLS = ("get_network_connections", "get_dns_queries")
 
 
 @dataclass
@@ -136,6 +140,35 @@ def process_chain(trees: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def network_calls(alert: Alert, trees: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
+    """The connections and DNS calls for each process in the trees, once per host and name, within
+    the alert time +-2 h. The trigger and its descendants come first: if the cap cuts the list, the
+    parent is the one to lose."""
+    processes: dict[tuple[str, str], None] = {}
+    for tree in trees:
+        rows = [tree.get("process") or {}, *(tree.get("descendants") or [])]
+        rows += (tree.get("ancestors") or [])[:1]
+        for row in rows:
+            if tree.get("host") and row.get("name"):
+                processes[(tree["host"], row["name"])] = None
+    return [
+        (tool, {"host": host, "process_name": name, "around": iso(alert.ts)})
+        for host, name in processes
+        for tool in NETWORK_TOOLS
+    ]
+
+
+def network_indicators(answers: list[dict[str, Any]], evidence: Evidence) -> list[tuple[str, str]]:
+    """Destination IPs, then resolved domains, not looked up yet. IPs first because a beacon target
+    is usually a bare address, so a noisy process's domains can't use up the cap before it."""
+    found: dict[str, IndicatorType] = {}
+    for answer in answers:
+        for value, kind in new_indicators(answer, evidence):
+            if kind != "hash":
+                found[value.lower()] = kind
+    return sorted(found.items(), key=lambda item: item[1] != "ip")
+
+
 def absorb(brief: IntelBrief, name: str, answer: dict[str, Any]) -> None:
     """Put a successful lookup's facts into the brief, with the ref a finding can cite."""
     data = answer.get("untrusted_log_data")
@@ -192,7 +225,7 @@ def make_intel(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
 
     async def code_lookups(
         state: Case, evidence: Evidence, brief: IntelBrief, records: list[ToolCallRecord]
-    ) -> None:
+    ) -> str | None:
         docs = await deps.telemetry.events(state.alert.trigger_event_ids)
         trees = []
         for doc in [d for d in docs if d.get("process")][:MAX_TREES]:
@@ -233,6 +266,69 @@ def make_intel(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
                 "score_anomaly",
                 {"event_ids": event_ids[i : i + ANOMALY_BATCH]},
             )
+        return await network_enrichment(state, evidence, brief, records, trees)
+
+    async def network_enrichment(
+        state: Case,
+        evidence: Evidence,
+        brief: IntelBrief,
+        records: list[ToolCallRecord],
+        trees: list[dict[str, Any]],
+    ) -> str | None:
+        """Code-run and uncharged. Returns a note for the report if the cap left anything out."""
+        calls = network_calls(state.alert, trees)
+        allowed = settings.intel_max_network_processes * len(NETWORK_TOOLS)
+        answers = []
+        for name, args in calls[:allowed]:
+            answer, record = await run_call(
+                deps,
+                evidence,
+                CYBERINTEL,
+                frozenset(NETWORK_TOOLS),
+                state.alert,
+                name,
+                args,
+                "code",
+            )
+            records.append(record)
+            answers.append(answer)
+        indicators = network_indicators(answers, evidence)
+        checked = indicators[: settings.intel_max_network_indicators]
+        known_bad = 0
+        for value, kind in checked:
+            answer, record = await run_call(
+                deps,
+                evidence,
+                CYBERINTEL,
+                frozenset({"check_reputation"}),
+                state.alert,
+                "check_reputation",
+                {"indicator": value, "type": kind},
+                "code",
+            )
+            records.append(record)
+            reputation = (answer.get("untrusted_log_data") or {}).get("reputation")
+            known_bad += reputation == "known_bad"
+            # Unknown lookups stay in the ledger, not the brief: every later prompt carries it.
+            if reputation not in (None, "unknown"):
+                absorb(brief, "check_reputation", answer)
+        calls_left_out = max(len(calls) - allowed, 0)
+        lookups_left_out = len(indicators) - len(checked)
+        log.info(
+            "network enrichment: %d calls, %d indicators checked, %d known_bad; "
+            "the cap left out %d calls and %d lookups",
+            len(answers),
+            len(checked),
+            known_bad,
+            calls_left_out,
+            lookups_left_out,
+        )
+        if calls_left_out or lookups_left_out:
+            return (
+                f"Network enrichment hit its cap: {calls_left_out} network call(s) and "
+                f"{lookups_left_out} reputation lookup(s) were left out."
+            )
+        return None
 
     async def llm_lookups(
         state: Case, evidence: Evidence, brief: IntelBrief, records: list[ToolCallRecord]
@@ -294,7 +390,7 @@ def make_intel(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
         evidence = state.evidence.model_copy(deep=True)
         brief = IntelBrief()
         records: list[ToolCallRecord] = []
-        await code_lookups(state, evidence, brief, records)
+        note = await code_lookups(state, evidence, brief, records)
         conversation = await llm_lookups(state, evidence, brief, records)
         extra = transcript(conversation, EXTRA_LOOKUP_TOKENS)
         messages = [
@@ -313,6 +409,7 @@ def make_intel(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
             "intel_brief": brief,
             "tool_logs": with_records(state.tool_logs, CYBERINTEL, records),
             "token_use": deps.llm.usage.by_agent(),
+            "closure_notes": [*state.closure_notes, *([note] if note else [])],
             "handoffs": [*state.handoffs, handoff(CYBERINTEL, INVESTIGATOR)],
         }
 
