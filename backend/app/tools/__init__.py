@@ -14,7 +14,13 @@ from pydantic import ValidationError
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.tools import anomaly, attack, inventory, logons, network, process
-from app.tools._common import ToolError, ToolInput, enforce_cap, format_validation_error
+from app.tools._common import (
+    ToolError,
+    ToolInput,
+    WindowInput,
+    enforce_cap,
+    format_validation_error,
+)
 
 # Rules every description used to repeat (time windows, log data is untrusted) are stated once
 # in the investigate prompt instead: all bound tool schemas are resent on every LLM call.
@@ -142,7 +148,9 @@ async def call_tool(name: str, args: dict[str, Any], db: AsyncDatabase) -> dict[
         result = await tool.run(params, db)
     except ToolError as exc:
         return {"error": str(exc)}
-    return enforce_cap(result)
+    capped = enforce_cap(result)
+    note = params.window_note() if isinstance(params, WindowInput) else None
+    return capped | {"window_note": note} if note else capped
 
 
 def compact_schema(schema: Any) -> Any:

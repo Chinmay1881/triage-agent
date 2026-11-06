@@ -74,7 +74,7 @@ def coverage_gap(state: Case, budget: int) -> CoverageGap | None:
             )
             return CoverageGap("first_checks", UNCHECKED_PLAN.format(checks=listed))
     if "min_data_calls" not in state.coverage_nudges:
-        done = sum(1 for r in log_rows if r.ok)
+        done = sum(1 for r in log_rows if r.ok and r.repeat_of is None)
         required = min(MIN_DATA_CALLS, budget)
         if done < required:
             message = TOO_FEW_CALLS.format(done=done, required=required)
@@ -178,7 +178,6 @@ def make_investigator(deps: Deps) -> dict[str, Callable[[Case], Awaitable[dict[s
             if used >= budget:
                 result: dict[str, Any] = {"error": BUDGET_EXHAUSTED}
             else:
-                used += 1
                 result, record = await run_call(
                     deps,
                     evidence,
@@ -189,6 +188,7 @@ def make_investigator(deps: Deps) -> dict[str, Callable[[Case], Awaitable[dict[s
                     call["args"],
                 )
                 records.append(record)
+                used += int(record.charged)
                 rows, rule_records = await auto_reputation(
                     deps, evidence, INVESTIGATOR, state.alert, result
                 )

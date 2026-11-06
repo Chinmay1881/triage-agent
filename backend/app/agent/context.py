@@ -109,7 +109,16 @@ def shrink(result: dict[str, Any], level: Level) -> dict[str, Any]:
     if "error" in result:
         return result
     out: dict[str, Any] = {"shortened": True}
-    for key in ("ref", "total", "shown", "budget_left", "window_defaulted", "intel_rule"):
+    for key in (
+        "ref",
+        "repeat_of",
+        "total",
+        "shown",
+        "budget_left",
+        "window_defaulted",
+        "window_note",
+        "intel_rule",
+    ):
         if key in result:
             out[key] = result[key]
     if "attack_catalog" in result:

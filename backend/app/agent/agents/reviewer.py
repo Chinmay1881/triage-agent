@@ -17,8 +17,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agent.agents.common import INVESTIGATOR_TOOLS, alert_block, handoff, to_json, with_records
-from app.agent.agents.triage import trigger_row
-from app.agent.case import Case, Dispute, Finding, Review, ReviewDraft, ToolCallRecord
+from app.agent.case import Case, Dispute, Evidence, Finding, Review, ReviewDraft, ToolCallRecord
 from app.agent.context import transcript
 from app.agent.deps import Deps
 from app.agent.injection import screen
@@ -27,13 +26,16 @@ from app.agent.prompts.system import SYSTEM
 from app.agent.toolrun import auto_reputation, run_call
 from app.config import INVESTIGATOR, REVIEWER
 from app.llm import LLMError
+from app.telemetry.decode import decode_encoded_command
 from app.tools import tool_specs
+from app.tools._common import cap_text, iso
 
 log = logging.getLogger(__name__)
 
-# Roughly: the investigator's evidence for the verdict, compact (Groq: ~8,000 tokens/min).
+# The reviewer's own calls, compact (Groq: ~8,000 tokens/min).
 TRANSCRIPT_TOKENS = 1500
-MAX_CITED_EVENTS = 8
+TARGET_CHARS = 160
+HASH_CHARS = 12
 NOT_VERIFIED = "absence claim not re-verified by a reviewer tool call"
 NOT_LISTED = "absence claim not reviewed"
 TOOL_NAMES = ", ".join(sorted(INVESTIGATOR_TOOLS))
@@ -86,6 +88,69 @@ def apply_verdict(
     return out, review
 
 
+def event_target(doc: dict[str, Any]) -> str | None:
+    """What an event acted on: a path, destination, domain, logon, task or command."""
+    if doc.get("file"):
+        return doc["file"].get("path")
+    if doc.get("network"):
+        n = doc["network"]
+        return f"{n.get('dst_ip')}:{n.get('dst_port')}"
+    if doc.get("dns"):
+        return doc["dns"].get("query")
+    if doc.get("logon"):
+        logon = doc["logon"]
+        return (
+            f"{logon.get('logon_type')} logon by {doc.get('user')} from {logon.get('src_ip')}: "
+            f"{logon.get('result')}"
+        )
+    if doc.get("task"):
+        return doc["task"].get("task_name")
+    if doc.get("access"):
+        return doc["access"].get("target_name")
+    cmdline = (doc.get("process") or {}).get("cmdline") or ""
+    return cap_text(decode_encoded_command(cmdline) or cmdline, TARGET_CHARS)
+
+
+def event_row(doc: dict[str, Any]) -> dict[str, Any]:
+    """One line of a finding's evidence table: enough to check who did what to what."""
+    process = doc.get("process") or {}
+    row = {
+        "event_id": doc["event_id"],
+        "ts": iso(doc["ts"]),
+        "event_type": doc["event_type"],
+        "process": process.get("name"),
+        "parent": process.get("parent_name"),
+        "target": event_target(doc),
+    }
+    if doc["event_type"] == "process_start":
+        row["signer"] = process.get("signer")
+        row["sha256"] = (process.get("sha256") or "")[:HASH_CHARS]
+    return row
+
+
+def evidence_by_finding(
+    findings: list[Finding], docs: dict[str, dict[str, Any]], evidence: Evidence
+) -> list[dict[str, Any]]:
+    """For each finding, a small table of its cited events and the tool results it cites."""
+    out = []
+    for finding in findings:
+        refs = []
+        for citation in finding.citations:
+            info = evidence.tool_refs.get(citation)
+            if info is not None:
+                refs.append(
+                    {"ref": citation, "ok": info.ok, "args": info.args, "result": info.digest}
+                )
+        out.append(
+            {
+                "finding": finding.id,
+                "cited_events": [event_row(docs[e]) for e in finding.event_ids if e in docs],
+                "cited_tool_results": refs,
+            }
+        )
+    return out
+
+
 def make_reviewer(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
     llm = deps.llm
     specs = tool_specs(INVESTIGATOR_TOOLS)
@@ -134,7 +199,6 @@ def make_reviewer(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
                 if left <= 0:
                     answer: dict[str, Any] = {"error": "no reviewer calls left"}
                 else:
-                    left -= 1
                     answer, record = await run_call(
                         deps,
                         evidence,
@@ -145,6 +209,7 @@ def make_reviewer(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
                         call["args"],
                     )
                     records.append(record)
+                    left -= int(record.charged)
                     rows, rule_records = await auto_reputation(
                         deps, evidence, REVIEWER, state.alert, answer
                     )
@@ -167,21 +232,14 @@ def make_reviewer(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
         if pending:
             conversation, left = await verify(state, pending, evidence, records)
             instructions = REVIEW_VERDICT.format(tools=TOOL_NAMES, budget_left=budget_left)
-            # The evidence behind the findings: the trigger and the brief aren't in the
-            # investigator's own tool calls, and without them true findings look unsupported.
-            cited = sorted(
-                {e for f in pending for e in f.event_ids} - set(state.alert.trigger_event_ids)
-            )
-            docs = await deps.telemetry.events(cited[:MAX_CITED_EVENTS])
+            cited = sorted({e for f in pending for e in f.event_ids})
+            docs = {d["event_id"]: d for d in await deps.telemetry.events(cited)}
             prompt = {
                 "alert": alert_block(state.alert),
                 "findings": findings_block(pending),
                 "untrusted_log_data": {
-                    "trigger_events": state.trigger_events,
-                    "cited_events": [trigger_row(d) for d in docs],
-                    "intel_facts": state.intel_brief.facts() if state.intel_brief else {},
+                    "evidence_by_finding": evidence_by_finding(pending, docs, evidence)
                 },
-                "investigator_evidence": transcript(state.messages, TRANSCRIPT_TOKENS),
                 "your_calls": transcript(conversation, TRANSCRIPT_TOKENS),
             }
             messages = [
@@ -196,7 +254,7 @@ def make_reviewer(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
         own_refs = {
             r.ref
             for r in [*state.tool_logs.get(REVIEWER, []), *records]
-            if r.ok and r.source == "llm"
+            if r.ok and r.source == "llm" and r.repeat_of is None
         }
         findings, outcome = apply_verdict(state.findings, draft, own_refs)
         previous = state.review or Review()

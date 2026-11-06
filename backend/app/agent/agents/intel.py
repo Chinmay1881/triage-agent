@@ -258,7 +258,6 @@ def make_intel(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
                 if left <= 0:
                     answer: dict[str, Any] = {"error": "no lookups left"}
                 else:
-                    left -= 1
                     answer, record = await run_call(
                         deps,
                         evidence,
@@ -269,7 +268,9 @@ def make_intel(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
                         call["args"],
                     )
                     records.append(record)
-                    absorb(brief, call["name"], answer)
+                    left -= int(record.charged)
+                    if record.repeat_of is None:
+                        absorb(brief, call["name"], answer)
                 conversation.append(
                     ToolMessage(to_json(answer), tool_call_id=call["id"], name=call["name"])
                 )

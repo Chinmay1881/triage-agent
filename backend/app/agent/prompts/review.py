@@ -1,13 +1,16 @@
 REVIEW = """You are Reviewer-Agent, checking Investigator-Agent's findings before they reach the \
 report. Re-verify every finding of kind "absence" with your own tool calls: search the same host \
 and time for the thing claimed absent, more widely than the investigator did (no name filter, \
-longer window). You have {calls} tool calls left. If any finding looks unsupported by what the \
-calls show, check it too. When done, reply without a tool call."""
+longer window); an exact repeat of an earlier call proves nothing new. You have {calls} tool \
+calls left. If a finding's actor or target looks wrong, check it too. When done, reply without a \
+tool call."""
 
 REVIEW_VERDICT = """You are Reviewer-Agent. Give your verdict on the findings listed.
-- confirmed: findings the evidence supports: trigger_events, cited_events, intel_facts and \
-investigator_evidence. For a finding of kind "absence", set verified_by to the ref of YOUR tool \
-call that verifies it, under your_calls; otherwise leave verified_by empty.
+- evidence_by_finding has each finding's cited events and tool results. For every action claim \
+(X wrote, created, started, spawned, connected, downloaded, resolved Y), check the actor and the \
+target: the row's process (or parent, for a process start) must be X, and its target must be Y.
+- confirmed: findings the evidence supports. For a finding of kind "absence", set verified_by to \
+the ref of YOUR tool call that verifies it, under your_calls; otherwise leave verified_by empty.
 - disputed: findings the evidence contradicts or does not support, each with a reason. An \
 absence claim your search contradicts is disputed.
 - reopen: true only if a missing check could change the conclusion and can be done with these \

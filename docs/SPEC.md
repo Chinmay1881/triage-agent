@@ -174,7 +174,7 @@ The agent can only call these 12 read-only functions. There is no shell, no code
 
 Rules every tool follows:
 
-- Inputs are validated with Pydantic. A bad host name or a 3-day window gets a clear error back to the agent, not an exception.
+- Inputs are validated with Pydantic. A bad host name gets a clear error back to the agent, not an exception. Each error costs a full LLM call, so a window over 24 hours is cut to its last 24 hours with a note in the result, not an error; sending `around` together with `start`/`end` is rejected with "use either around or start and end".
 - Time windows are capped at 24 hours: `start` + `end`, or `around` (the alert time) for ± 2 hours.
 - Every event row includes its `event_id` (groups list up to 10), so findings can cite evidence.
 - Results are capped at about 1,500 tokens, estimated as `len(json) / 4`. Over the cap, rows are dropped from the end and the result says "showing N of M; narrow your search".
@@ -187,6 +187,7 @@ Rules every tool follows:
 - Tools are split by agent. Investigator-Agent and Reviewer-Agent get the 7 telemetry tools, about 1,290 tokens of schemas per call instead of 1,840; CyberIntel-Agent gets host, user, reputation, ATT&CK and anomaly lookups. A call to any other tool comes back as an error the model can see.
 - A window tool called with no window gets the alert time ±2 hours; `run_tools` logs it and marks the result, instead of returning an error that costs a call.
 - Every call gets a ref such as `tool:get_host_info#3` that findings can cite.
+- An exact repeat of a successful call is answered from the case's ledger without running the tool. A repeat of another agent's call gets the full result; a repeat of an agent's own call gets only the identifiers. Repeats cost no budget up to 3 per agent, then they cost budget again, so a model can't loop on free calls. For the reviewer, a repeat doesn't count as re-verifying an absence claim.
 - Tool schemas are sent to the model in a compact form (`tool_specs()`: no titles, null defaults or `anyOf` nulls), about 1,850 tokens for all 12. Rules every tool shares (time windows, untrusted log data) are stated once in the investigate prompt instead of in each description. `call_tool` still validates against the full Pydantic models.
 
 ## ML and NLP components
@@ -281,7 +282,9 @@ Models and reasoning effort are settings (`LLM_MODEL`, `AGENT_MODELS`, `LLM_REAS
 
 **Grounding** (`app/agent/grounding.py`). An event citation must contain an entity the claim names: a process, IP, domain, hash, file or task. A host or user alone only grounds a logon event, because otherwise "FIN-WS-02 runs Windows 11" could cite any event on that host. Host and user facts, reputation facts and absence claims cite the tool result (`tool:get_host_info#3`) instead; the ref must exist and have succeeded, and an observation must name an entity from that result. Failing citations are removed, a finding left with none is dropped, and both are counted. An absence claim needs at least one tool citation.
 
-**Reviewer-Agent** re-verifies every absence claim with its own tool calls and gives a verdict. Code enforces the rules:
+An action claim ("X wrote, created, started, spawned, connected, downloaded or resolved Y", active or passive) must be shown by an event: the process doing it must match and the event type must fit the action. For start verbs the event is the child's `process_start`, so the actor is its `parent_name`. Every action in a claim needs a cited event that shows it, or the finding is dropped: a tool result can't prove who did what. Citations that show none of the actions are removed.
+
+**Reviewer-Agent** re-verifies every absence claim with its own tool calls and gives a verdict. Its verdict prompt has, for each finding, a small table of the cited events (`event_id`, `ts`, `event_type`, process, parent, target, plus signer and short hash for process starts) and the tool results it cites, and it must check the actor and the target of every action claim. Code enforces the rules:
 
 | Finding | Reviewer's verdict | Status | Reaches the report |
 | --- | --- | --- | --- |
@@ -295,7 +298,7 @@ Models and reasoning effort are settings (`LLM_MODEL`, `AGENT_MODELS`, `LLM_REAS
 
 **Injection scanning.** `detect()` in `app/agent/injection.py` combines three generic regex families (text addressed to an AI or automated system; instructions to ignore or override prior instructions; instructions to mark, classify or close an alert, event or activity as benign) with the trained classifier. Sentinel-Triage scans the trigger events' full `cmdline` and decoded command line, and `run_tools` scans `untrusted_log_data` in every tool result, but not `attack_catalog`, which is MITRE's text. Flags are `{event_id, field, method: "regex" | "classifier", score}`. Flagged text stays inside `untrusted_log_data`. LLM-written text that goes back into a later prompt gets regex screening only and is withheld if it matches, because the classifier's false positives on the model's own English cost real findings.
 
-**Keeping context lean.** `Case` keeps every tool result in full. `investigate` sees the last 2 results in full and older ones as identifiers only: event IDs plus the hosts, users, PIDs, IPs, domains, sha256s and task names they mention. `summarize_findings` and the reviewer get a JSON transcript of the calls with each result compacted, falling back to identifiers only, oldest first, over a token budget.
+**Keeping context lean.** `Case` keeps every tool result in full. `investigate` sees the last 2 results in full and older ones as identifiers only: event IDs plus the hosts, users, PIDs, IPs, domains, sha256s and task names they mention. `summarize_findings` gets a JSON transcript of the calls with each result compacted, falling back to identifiers only, oldest first, over a token budget. The reviewer gets the evidence table above plus its own calls.
 
 **The dev CLI and s12.** `python -m app.cli investigate --alert <id>` refuses the alerts listed in `data/generated/cli_blocklist.json`, which the generator writes with the alert IDs of injection scenarios and nothing else. Only `app/cli.py` reads it, and a test checks that nothing under `app/agent` or `app/tools` does. s12 is run only by the eval harness.
 

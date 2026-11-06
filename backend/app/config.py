@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     intel_max_hosts_users: int = 6
     intel_max_anomaly_events: int = 20
     auto_reputation_per_call: int = 5
+    # Exact repeat calls are answered from the ledger for free this many times per agent, then
+    # they cost budget again, so a model repeating itself can't loop on free calls (hard rule 8).
+    free_repeats_per_agent: int = 3
 
     # SecretStr because the URIs embed passwords; they never show up in logs or reprs.
     telemetry_mongo_uri: SecretStr

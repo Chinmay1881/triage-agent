@@ -5,18 +5,22 @@
   an error that costs a call.
 - Every call gets a ref ("tool:get_host_info#3") that findings can cite, and its log content is
   scanned for injection. Event IDs and entities go into the shared evidence ledger.
+- An exact repeat of a successful call is answered from the ledger without running the tool. A
+  repeat of another agent's call gets the full result, since this agent hasn't seen it; a repeat
+  of its own call gets only the identifiers, since the rest is already in its conversation.
 - LLM-chosen calls by the investigator and reviewer also get an automatic reputation lookup for
   new IPs, domains and hashes in their results (source "intel_rule", capped per call, no budget
   cost): those agents don't have check_reputation, but a beacon target they find still needs
   checking. The result stays in the same message, so it costs few tokens.
 """
 
+import json
 import logging
 import re
 from typing import Any, Literal
 
-from app.agent.case import Evidence, ToolCallRecord, ToolRef, ToolSource
-from app.agent.context import event_ids_in, identifiers
+from app.agent.case import Evidence, StoredAnswer, ToolCallRecord, ToolRef, ToolSource
+from app.agent.context import event_ids_in, identifiers, shrink
 from app.agent.deps import Deps
 from app.agent.grounding import is_internal_ip
 from app.agent.injection import scan_tool_result
@@ -30,6 +34,7 @@ WINDOW_KEYS = ("around", "start", "end")
 # Extra strings that identify what a result is about, beside identifiers().
 ENTITY_KEYS = ("indicator", "display_name", "hostname", "username")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+DIGEST_CHARS = 240
 
 
 def with_default_window(
@@ -78,7 +83,16 @@ def _entities(data: Any) -> list[str]:
     return sorted({str(v) for v in values})
 
 
-def record_result(name: str, result: dict[str, Any], evidence: Evidence) -> tuple[str, list[str]]:
+def _digest(data: Any) -> str:
+    if data is None:
+        return ""
+    text = json.dumps(data, separators=(",", ":"), default=str, ensure_ascii=False)
+    return text if len(text) <= DIGEST_CHARS else text[: DIGEST_CHARS - 1] + "…"
+
+
+def record_result(
+    name: str, args: dict[str, Any], result: dict[str, Any], evidence: Evidence
+) -> tuple[str, list[str]]:
     """Enter one result into the ledger; returns its ref and the event IDs it holds."""
     evidence.calls += 1
     ref = f"tool:{name}#{evidence.calls}"
@@ -88,12 +102,55 @@ def record_result(name: str, result: dict[str, Any], evidence: Evidence) -> tupl
         evidence.seen_event_ids.setdefault(event_id, name)
     if data is not None:
         _note_rows(data, evidence)
-    evidence.tool_refs[ref] = ToolRef(tool=name, ok="error" not in result, entities=_entities(data))
+    evidence.tool_refs[ref] = ToolRef(
+        tool=name,
+        ok="error" not in result,
+        entities=_entities(data),
+        args=args,
+        digest=_digest(data),
+    )
     known = {(f.event_id, f.field, f.method) for f in evidence.injection_flags}
     evidence.injection_flags += [
         f for f in scan_tool_result(result) if (f.event_id, f.field, f.method) not in known
     ]
     return ref, ids
+
+
+def call_key(name: str, args: dict[str, Any]) -> str:
+    return f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+
+
+def answer_repeat(
+    deps: Deps,
+    evidence: Evidence,
+    agent: str,
+    stored: StoredAnswer,
+    name: str,
+    args: dict[str, Any],
+    defaulted: bool,
+) -> tuple[dict[str, Any], ToolCallRecord]:
+    used = evidence.free_repeats.get(agent, 0)
+    evidence.free_repeats[agent] = used + 1
+    own = stored.agent == agent
+    result = shrink(stored.result, "ids") if own else stored.result
+    note = (
+        f"same call as {stored.ref}, already in this conversation"
+        if own
+        else f"already run by {stored.agent}; answered from the case ledger"
+    )
+    log.info("%s: %s repeats %s; answered from the ledger", agent, name, stored.ref)
+    record = ToolCallRecord(
+        ref=stored.ref,
+        agent=agent,
+        name=name,
+        args=args,
+        ok=True,
+        event_ids=len(event_ids_in(result)),
+        defaulted_window=defaulted,
+        repeat_of=stored.ref,
+        charged=used >= deps.settings.free_repeats_per_agent,
+    )
+    return result | {"ref": stored.ref, "repeat_of": stored.ref, "repeat_note": note}, record
 
 
 async def run_call(
@@ -108,6 +165,10 @@ async def run_call(
 ) -> tuple[dict[str, Any], ToolCallRecord]:
     """One call; `evidence` is updated in place. The result gets its ref."""
     final_args, defaulted = with_default_window(name, args, alert)
+    key = call_key(name, final_args)
+    stored = evidence.answers.get(key)
+    if stored is not None and source == "llm" and name in allowed:
+        return answer_repeat(deps, evidence, agent, stored, name, final_args, defaulted)
     if name not in allowed:
         result: dict[str, Any] = {
             "error": f"{name} is not available to {agent}; available: {', '.join(sorted(allowed))}"
@@ -116,7 +177,7 @@ async def run_call(
         result = await deps.call_tool(name, final_args)
     if defaulted:
         log.info("%s: %s called without a window; using the alert time +-2 h", agent, name)
-    ref, ids = record_result(name, result, evidence)
+    ref, ids = record_result(name, final_args, result, evidence)
     if name == "check_reputation" and isinstance(args.get("indicator"), str):
         evidence.looked_up.append(args["indicator"].lower())
     record = ToolCallRecord(
@@ -133,6 +194,8 @@ async def run_call(
     annotated = result | {"ref": ref}
     if defaulted:
         annotated["window_defaulted"] = "alert time +-2 h"
+    if record.ok:
+        evidence.answers[key] = StoredAnswer(ref=ref, agent=agent, result=annotated)
     return annotated, record
 
 

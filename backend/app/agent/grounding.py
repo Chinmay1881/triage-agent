@@ -11,11 +11,15 @@ evidence ledger; hard rule 5's "code verifies citations" goes further than "the 
   evidence (Reviewer-Agent re-verifies it).
 - Failing citations are removed, and a finding left with none is dropped. An absence claim also
   needs at least one tool citation: an event can't show that something didn't happen.
+- An action claim ("msupdate.exe wrote X") must be backed by an event showing that process doing
+  that kind of thing. Naming real entities isn't enough: "the file was created by msupdate.exe"
+  once passed by citing a process tree, when an event showed powershell.exe wrote the file.
 """
 
 import ipaddress
 import re
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from app.agent.case import Evidence, FindingDraft
@@ -42,6 +46,144 @@ ABSENCE = re.compile(
     r"contact(?:ed)?|initiated?|establish(?:ed)?|ma(?:ke|de)|created?)\b",
     re.IGNORECASE,
 )
+
+
+# Verb forms by the event type that shows the action. Starting a process is the odd one out:
+# the event is the child's process_start, so the acting process is its parent_name.
+ACTION_EVENTS: dict[str, frozenset[str]] = {
+    "write": frozenset({"file_write"}),
+    "create": frozenset({"file_write", "scheduled_task"}),
+    "start": frozenset({"process_start"}),
+    "connect": frozenset({"network_conn"}),
+    "download": frozenset({"network_conn", "file_write"}),
+    "resolve": frozenset({"dns_query"}),
+}
+VERB_KIND: dict[str, str] = {
+    "wrote": "write",
+    "writes": "write",
+    "written": "write",
+    "created": "create",
+    "creates": "create",
+    "started": "start",
+    "starts": "start",
+    "spawned": "start",
+    "spawns": "start",
+    "launched": "start",
+    "launches": "start",
+    "connected": "connect",
+    "connects": "connect",
+    "downloaded": "download",
+    "downloads": "download",
+    "resolved": "resolve",
+    "resolves": "resolve",
+}
+VERB = "|".join(sorted(VERB_KIND, key=len, reverse=True))
+WORD = r"[A-Za-z0-9_.\-]+"
+PID = r"(?:\s*\(pid\s*\d+\))?"
+PASSIVE_ACTION = re.compile(rf"\b(?P<verb>{VERB})\s+by\s+(?:the\s+)?(?P<actor>{WORD})", re.I)
+PASSIVE_SUBJECT = re.compile(
+    rf"(?P<subject>{WORD}){PID}(?:\s+process)?\s+(?:was|is|were)\s*$", re.I
+)
+ACTIVE_ACTION = re.compile(
+    rf"(?<![\w.\-])(?P<actor>{WORD}){PID}(?:\s+process)?(?:,?\s+which)?\s+(?:(?:also|then|has|had)\s+)?"
+    rf"(?P<verb>{VERB})\b(?!\s+by\b)(?=(?:\s+(?:(?:a|an|the|new)\s+)*(?P<object>{WORD}))?)",
+    re.I,
+)
+SUBJECT_STARTED = re.compile(
+    rf"(?P<subject>{WORD}){PID}(?:\s+process)?\s+(?:was|is|were)\s+"
+    rf"(?:started|spawned|launched)\b(?!\s+by\b)",
+    re.I,
+)
+CONNECTION_FROM = re.compile(rf"\bconnections?\s+from\s+(?:the\s+)?(?P<actor>{WORD})", re.I)
+
+
+@dataclass(frozen=True)
+class ActionClaim:
+    """`actor` did something of `kind`. For "start", `target` is the started process; `loose` means
+    "X started" with no object, where X may be the parent or the process itself."""
+
+    kind: str
+    actor: str | None = None
+    target: str | None = None
+    loose: bool = False
+
+
+def _stem(name: str | None) -> str:
+    return (name or "").lower().removesuffix(".exe")
+
+
+def _process_token(token: str | None, known: set[str]) -> str | None:
+    """`token` if it names a process: a .exe name, or a stem seen in this investigation."""
+    if not token:
+        return None
+    cleaned = token.rstrip(".,;:")
+    return cleaned if cleaned.lower().endswith(".exe") or _stem(cleaned) in known else None
+
+
+def action_claims(claim: str, known: set[str]) -> list[ActionClaim]:
+    """The process actions a claim asserts. `known` holds process-name stems."""
+    found: list[ActionClaim] = []
+    for m in PASSIVE_ACTION.finditer(claim):
+        actor = _process_token(m["actor"], known)
+        if actor is None:
+            continue
+        kind = VERB_KIND[m["verb"].lower()]
+        before = PASSIVE_SUBJECT.search(claim[: m.start()])
+        subject = _process_token(before["subject"], known) if before else None
+        found.append(ActionClaim(kind, actor, subject if kind == "start" else None))
+    for m in ACTIVE_ACTION.finditer(claim):
+        actor = _process_token(m["actor"], known)
+        if actor is None:
+            continue
+        kind = VERB_KIND[m["verb"].lower()]
+        target = _process_token(m["object"], known) if kind == "start" else None
+        found.append(ActionClaim(kind, actor, target, loose=kind == "start" and target is None))
+    for m in SUBJECT_STARTED.finditer(claim):
+        subject = _process_token(m["subject"], known)
+        if subject is not None:
+            found.append(ActionClaim("start", target=subject))
+    for m in CONNECTION_FROM.finditer(claim):
+        actor = _process_token(m["actor"], known)
+        if actor is not None:
+            found.append(ActionClaim("connect", actor))
+    return found
+
+
+def event_shows_action(action: ActionClaim, doc: dict[str, Any]) -> bool:
+    if doc.get("event_type") not in ACTION_EVENTS[action.kind]:
+        return False
+    process = doc.get("process") or {}
+    name, parent = _stem(process.get("name")), _stem(process.get("parent_name"))
+    actor, target = _stem(action.actor), _stem(action.target)
+    if action.kind != "start":
+        return name == actor
+    if action.loose:
+        return actor in (name, parent)
+    return (not actor or parent == actor) and (not target or name == target)
+
+
+def known_process_stems(docs: dict[str, dict[str, Any]], evidence: Evidence) -> set[str]:
+    names = {_stem(n) for names in evidence.aliases.values() for n in names}
+    for doc in docs.values():
+        process = doc.get("process") or {}
+        names |= {_stem(process.get("name")), _stem(process.get("parent_name"))}
+    return names - {""} - GENERIC_STEMS
+
+
+def check_actions(
+    claim: str, kept: list[str], docs: dict[str, dict[str, Any]], evidence: Evidence
+) -> list[str]:
+    """`kept` minus event citations that show none of the claim's actions. Every action must be
+    shown by some cited event, or nothing is kept: a tool result can't prove who did what."""
+    actions = action_claims(claim, known_process_stems(docs, evidence))
+    if not actions:
+        return kept
+    events = {c: docs[c] for c in kept if c in docs}
+    if not all(any(event_shows_action(a, d) for d in events.values()) for a in actions):
+        return []
+    return [
+        c for c in kept if c not in events or any(event_shows_action(a, events[c]) for a in actions)
+    ]
 
 
 def is_absence_claim(claim: str) -> bool:
@@ -159,6 +301,6 @@ def grounded_citations(
                 kept.append(citation)
         elif TOOL_CITATION.match(citation) and tool_grounds(draft.claim, kind, citation, evidence):
             kept.append(citation)
-    if kind == "absence" and not any(c.startswith("tool:") for c in kept):
-        return []
-    return kept
+    if kind == "absence":
+        return kept if any(c.startswith("tool:") for c in kept) else []
+    return check_actions(draft.claim, kept, docs, evidence)

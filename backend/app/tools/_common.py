@@ -2,7 +2,8 @@
 
 - Inputs are Pydantic models; bad input becomes {"error": ...}, never an exception.
 - Time windows are at most 24 h. Give `start` and `end`, or `around` for around ± 2 h
-  (the agent passes the alert time as `around`).
+  (the agent passes the alert time as `around`), never both. A longer window is cut to its last
+  24 h with a note in the result: an error would cost a full LLM call to learn the same thing.
 - At most 25 rows, command lines cut to 300 characters, and every event row has event_id.
 - Log content is returned under "untrusted_log_data", so prompts can label it as evidence
   and never as instructions.
@@ -70,9 +71,12 @@ class WindowInput(ToolInput):
 
     _start: datetime = PrivateAttr()
     _end: datetime = PrivateAttr()
+    _note: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _valid_window(self) -> Self:
+        if self.around is not None and (self.start is not None or self.end is not None):
+            raise ValueError("use either around or start and end, not both")
         if (self.start is None) != (self.end is None):
             raise ValueError("give both start and end, or neither")
         if self.start is not None and self.end is not None:
@@ -84,13 +88,27 @@ class WindowInput(ToolInput):
             raise ValueError("give start and end, or around (usually the alert time)")
         if self._end <= self._start:
             raise ValueError("end must be after start")
-        if self._end - self._start > MAX_WINDOW:
-            hours = (self._end - self._start).total_seconds() / 3600
-            raise ValueError(f"time window is {hours:.0f} h; the maximum is 24 h")
+        span = self._end - self._start
+        if span > MAX_WINDOW:
+            self._start = self._end - MAX_WINDOW
+            self._note = (
+                f"the window asked for was {format_duration(span)}; the maximum is 24 h, so this "
+                f"covers its last 24 h: {iso(self._start)} to {iso(self._end)}"
+            )
         return self
 
     def bounds(self) -> tuple[datetime, datetime]:
         return self._start, self._end
+
+    def window_note(self) -> str | None:
+        return self._note
+
+
+def format_duration(span: timedelta) -> str:
+    """Exact to the minute: "24 h" would read as nonsense for a window just over the limit."""
+    minutes = math.ceil(span.total_seconds() / 60)
+    hours, rest = divmod(minutes, 60)
+    return f"{hours} h {rest} min" if rest else f"{hours} h"
 
 
 def format_validation_error(exc: ValidationError) -> str:

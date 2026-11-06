@@ -19,9 +19,10 @@ from app.tools._common import (
     contains,
     enforce_cap,
     estimate_tokens,
+    format_duration,
     list_result,
 )
-from app.tools.process import process_row
+from app.tools.process import ProcessSearchInput, process_row
 from scripts.gen.dataset import Dataset
 from scripts.gen.scenario import ScenarioResult, encode_powershell
 from scripts.load import load_collections
@@ -122,8 +123,18 @@ def test_filters_are_escaped_not_regex() -> None:
         ("search_process_events", {"host": "FIN-WS-01"}, "give start and end, or around"),
         (
             "search_process_events",
-            {"host": "FIN-WS-01", "start": "2026-10-05T00:00:00Z", "end": "2026-10-08T00:00:00Z"},
-            "maximum is 24 h",
+            {
+                "host": "FIN-WS-01",
+                "around": ALERT_TS,
+                "start": "2026-10-06T09:00:00Z",
+                "end": "2026-10-06T11:00:00Z",
+            },
+            "use either around or start and end",
+        ),
+        (
+            "get_logon_history",
+            {"user": "a.b", "around": ALERT_TS, "start": "2026-10-06T09:00:00Z"},
+            "use either around or start and end",
         ),
         (
             "search_process_events",
@@ -488,3 +499,63 @@ async def test_score_anomaly_scores_explains_and_caps(
         assert {"feature", "value", "baseline_share"} == set(row["stood_out"][0])
     assert "not scored" in rows[8]["note"]
     assert rows[0]["percentile"] > 90
+
+
+# --- windows: over-long ones are cut, not refused ---------------------------------------------
+
+
+def test_long_window_is_cut_to_its_last_24_hours_with_a_note() -> None:
+    params = ProcessSearchInput(
+        host="FIN-WS-01", start="2026-10-05T00:00:00Z", end="2026-10-08T00:00:00Z"
+    )
+
+    start, end = params.bounds()
+    assert end - start == timedelta(hours=24)
+    assert end == datetime(2026, 10, 8, tzinfo=UTC)
+    note = params.window_note()
+    assert note is not None
+    assert "72 h" in note and "2026-10-07T00:00:00Z" in note
+
+
+def test_window_just_over_the_limit_says_so_exactly() -> None:
+    params = ProcessSearchInput(
+        host="FIN-WS-01", start="2026-10-06T13:25:00Z", end="2026-10-07T13:30:00Z"
+    )
+
+    note = params.window_note()
+    assert note is not None and "24 h 5 min" in note
+
+
+def test_window_of_exactly_24_hours_is_left_alone() -> None:
+    params = ProcessSearchInput(
+        host="FIN-WS-01", start="2026-10-06T00:00:00Z", end="2026-10-07T00:00:00Z"
+    )
+
+    assert params.window_note() is None
+
+
+@pytest.mark.parametrize(
+    ("span", "text"),
+    [
+        (timedelta(hours=24), "24 h"),
+        (timedelta(hours=24, minutes=5), "24 h 5 min"),
+        (timedelta(hours=24, seconds=1), "24 h 1 min"),
+        (timedelta(hours=72), "72 h"),
+    ],
+)
+def test_format_duration_never_rounds_down_to_the_limit(span: timedelta, text: str) -> None:
+    assert format_duration(span) == text
+
+
+@pytest.mark.mongo
+async def test_long_window_result_carries_the_note(ds: Dataset, tools_db: AsyncDatabase) -> None:
+    args = {
+        "host": scenario(ds, "s01").alert.host,
+        "start": "2026-10-05T00:00:00Z",
+        "end": "2026-10-08T00:00:00Z",
+    }
+
+    result = await call_tool("search_process_events", args, tools_db)
+
+    assert "error" not in result and "72 h" in result["window_note"]
+    assert all_results_capped(result)

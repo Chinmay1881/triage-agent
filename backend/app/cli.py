@@ -121,6 +121,7 @@ def print_summary(result: RunResult, usage: UsageLog) -> None:
         for record in records:
             tag = "" if record.source == "llm" else f" [{record.source}]"
             tag += " [default window]" if record.defaulted_window else ""
+            tag += " [repeat, from ledger]" if record.repeat_of else ""
             outcome = "ok" if record.ok else f"error: {record.error}"
             print(f"    {record.ref} {short(record.args)}{tag} {outcome}")
     if state.coverage_nudges:

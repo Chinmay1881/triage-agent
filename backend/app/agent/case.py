@@ -182,6 +182,9 @@ class ToolCallRecord(_Strict):
     source: ToolSource = "llm"
     # run_tools filled in the alert time +-2 h because the call gave no window.
     defaulted_window: bool = False
+    # An exact repeat answered from the ledger: no tool ran. Free up to a per-agent cap.
+    repeat_of: str | None = None
+    charged: bool = True
 
 
 class ToolRef(_Strict):
@@ -190,6 +193,15 @@ class ToolRef(_Strict):
     tool: str
     ok: bool
     entities: list[str] = []
+    args: dict[str, Any] = {}
+    # A short view of the result, for the reviewer. Log content: goes under untrusted_log_data.
+    digest: str = ""
+
+
+class StoredAnswer(_Strict):
+    ref: str
+    agent: str
+    result: dict[str, Any]
 
 
 class Evidence(_Strict):
@@ -204,6 +216,9 @@ class Evidence(_Strict):
     # sha256 -> process or file names seen with it, so a claim can name the file.
     aliases: dict[str, list[str]] = {}
     looked_up: list[str] = []
+    # Successful calls by tool and arguments, to answer exact repeats without running them again.
+    answers: dict[str, StoredAnswer] = {}
+    free_repeats: dict[str, int] = {}
     injection_flags: list[InjectionFlag] = []
 
 
