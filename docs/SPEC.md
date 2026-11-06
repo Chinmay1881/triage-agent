@@ -339,24 +339,29 @@ FastAPI runs each investigation in the background and writes every step to Mongo
 | Method | Path | Does |
 | --- | --- | --- |
 | GET | `/health` | Liveness check |
-| GET | `/alerts` | Alert queue, filter by severity / status |
-| GET | `/alerts/{id}` | One alert with host and user info |
+| GET | `/meta` | Whether this server runs the scripted model |
+| GET | `/alerts` | Alert queue with each alert's latest run and priority, filter by severity / status. No descriptions; a blocked alert shows only its ID, severity and that it is blocked |
+| GET | `/alerts/{id}` | One alert with host and user info. 403 for a blocked alert |
 | POST | `/investigations` | Body `{alert_id, model?}` → starts a run, returns `investigation_id`. Runs go one at a time. Refuses blocklisted alerts with 403 unless `ALLOW_BLOCKED_ALERTS` is set |
+| GET | `/investigations` | Past runs, newest first, to reopen and replay |
 | GET | `/investigations/{id}/events` | SSE stream of steps, replaying stored ones first |
+| GET | `/investigations/{id}/raw-event/{event_id}` | One event for the side drawer. Only events this run cites, once it has finished; a flagged event's log text is withheld |
 | GET | `/investigations/{id}` | Final state: findings, mappings, verdict, risk, recommendations |
 | GET | `/investigations/{id}/report.md` | Report download, including the decisions so far |
-| POST | `/investigations/{id}/decision` | Body `{action_id, decision: approve \| reject, note}`, `{verdict_decision: agree \| override, override_verdict?, note}`, or both. Stored append-only with a timestamp; executes nothing |
+| POST | `/investigations/{id}/decision` | Body `{action_id, decision: approve \| reject, note}`, `{verdict_decision: agree \| override, override_verdict?, note}` (an override needs a note), or both. Stored append-only with a timestamp; executes nothing |
 | GET | `/evals/latest` | Latest eval results for the scoreboard |
 
-SSE event types: `node_step`, `handoff`, `tool_called`, `tool_result` (tool, status, row count and ref, not raw logs), `finding_added`, `mapping_checked`, `verdict`, `report_ready`, `error`, `done`. Stored events replay first, new ones follow by polling (change streams need a replica set), and `Last-Event-ID` resumes a dropped stream.
+SSE event types: `node_step`, `handoff`, `stage_done` (a stage's Agent trail row), `tool_called`, `tool_result` (tool, status, row count and ref, not raw logs), `finding_added`, `mapping_checked`, `verdict`, `report_ready`, `error`, `done`. Stored events replay first, new ones follow by polling (change streams need a replica set), and `Last-Event-ID` resumes a dropped stream.
+
+**Mock mode.** With `LLM_MODE=mock` (`python tasks.py dev-api --mock`), POST /investigations runs the whole chain offline on the scripted model in `app/agent/mock_model.py`, which reads no truth. The record carries `mock: true` and the investigation page shows a banner. Runs from the dashboard use the Mongo store, so finished ones stay and can be reopened and replayed; mock and live runs sit side by side, told apart by that flag.
 
 **Dashboard pages**
 
-- `/` Alert queue: severity, rule, host, user, time, status, an Investigate button.
-- `/investigations/[id]` Left: live timeline of the agent's steps. Middle: findings, each with event-ID chips that open the raw log in a side drawer. Right: verdict card with confidence, a risk gauge, ATT&CK technique chips linking to attack.mitre.org, and recommendations. Below: the rendered report with a download button.
-- `/evals` Scoreboard: one row per model, one column per metric, plus a pass/fail grid per scenario.
+- `/` Alert queue: priority, severity, rule, host, user, time, status, an Investigate button, sorted by priority then severity; below it, past investigations.
+- `/investigations/[id]` Left: the agent trail, each stage ticking in with its output. Middle: findings, each with event-ID chips that open the raw log in a side drawer. Right: verdict card with confidence, a risk gauge with its breakdown, ATT&CK technique chips linking to attack.mitre.org, the injection scan, and the analyst decision panel. Below: the key event timeline with anomaly percentiles, and the rendered report with a download button. Replay streams a finished run again.
+- `/evals` Scoreboard: one table per config, a pass/fail grid per scenario, a per-agent table and the notes, with mock results under their banner.
 
-Design direction: dark, dense, calm, like real SOC tools. Red only for critical.
+Design direction: dark, dense, calm, like real SOC tools. Red only for P1 and critical; a malicious verdict is amber. Log text renders as plain text: the report's Markdown allows no raw HTML, and only attack.mitre.org links are clickable.
 
 ## Evals
 

@@ -12,17 +12,24 @@ from pymongo import AsyncMongoClient
 from pymongo.errors import PyMongoError
 
 from app.agent.deps import MongoTelemetry
+from app.agent.mock_model import mock_model
 from app.api.routes import Services, router
 from app.api.runner import Runner
 from app.api.store import MongoStore
-from app.config import get_settings
-from app.llm import get_model
+from app.config import Settings, get_settings
+from app.llm import LLM, get_model
 from app.telemetry.db import telemetry_client, telemetry_db
+from app.telemetry.models import Alert
 from app.tools import call_tool
 
 log = logging.getLogger(__name__)
 
 RESULTS_DIR = Path(__file__).resolve().parents[2] / "evals" / "results"
+
+
+def llm_for(settings: Settings, alert: Alert) -> LLM:
+    """LLM_MODE=mock runs the whole chain offline on the scripted model, with no Groq call."""
+    return mock_model(alert) if settings.llm_mode == "mock" else get_model(settings)
 
 
 def build_services() -> Services:
@@ -33,7 +40,7 @@ def build_services() -> Services:
         settings.triage_mongo_uri.get_secret_value(), tz_aware=True, serverSelectionTimeoutMS=3000
     )
     store = MongoStore(triage_client.get_default_database())
-    runner = Runner(store, telemetry, partial(call_tool, db=db), settings, get_model)
+    runner = Runner(store, telemetry, partial(call_tool, db=db), settings, llm_for)
     return Services(store, telemetry, runner, settings, RESULTS_DIR)
 
 

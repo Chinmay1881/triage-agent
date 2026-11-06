@@ -50,6 +50,7 @@ from app.agent.agents.intel import (  # noqa: E402
 )
 from app.agent.case import Case, Evidence  # noqa: E402
 from app.agent.deps import MongoTelemetry, ToolRunner  # noqa: E402
+from app.agent.mock_model import mock_model  # noqa: E402
 from app.api.routes import Services  # noqa: E402
 from app.api.runner import Runner  # noqa: E402
 from app.api.store import InMemoryStore  # noqa: E402
@@ -68,7 +69,6 @@ from app.tools import call_tool  # noqa: E402
 from evals.budget import SpendLog, next_run_tokens  # noqa: E402
 from evals.common import EVAL_SEED, RESULTS, append_jsonl, read_jsonl  # noqa: E402
 from evals.configs import CONFIGS, EvalConfig, EvalSettings, Tier  # noqa: E402
-from evals.mock_model import mock_model  # noqa: E402
 from evals.scoring import (  # noqa: E402
     ErrorKind,
     IntelCoverage,
@@ -220,8 +220,8 @@ async def run_one(
         raise ValueError(f"{truth.scenario}: alert {truth.alert_id} isn't loaded; variant mismatch")
     watched: list[WatchedLLM] = []
 
-    def llm_for(s: Settings) -> LLM:
-        watched.append(WatchedLLM(env.llm_for(s, alert)))
+    def llm_for(s: Settings, for_alert: Alert) -> LLM:
+        watched.append(WatchedLLM(env.llm_for(s, for_alert)))
         return watched[-1]
 
     store = InMemoryStore()

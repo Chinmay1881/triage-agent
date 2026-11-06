@@ -30,11 +30,11 @@ Investigator budget: P2 from Sentinel-Triage: 10 tool calls. Calls used: 4.
 
 | Stage | Model | LLM calls | Tool calls | Duration | Output |
 | --- | --- | --- | --- | --- | --- |
-| Sentinel-Triage | mock | 1 | 1 | 0.4 s | P2 endpoint |
-| CyberIntel-Agent | mock | 2 | 8 | 0.1 s | 4 indicators, 2 known_bad |
-| Investigator-Agent | mock | 7 | 9 | 0.1 s | 8 findings |
-| Reviewer-Agent | mock | 4 | 7 | 0.1 s | 6 confirmed, 1 disputed, 1 unreviewed |
-| Report & Human Review | mock | 5 | 0 | 1.8 s | malicious, risk 73, 2 techniques, 3 actions |
+| Sentinel-Triage | mock | 1 | 1 | 0.1 s | P2 endpoint |
+| CyberIntel-Agent | mock | 2 | 15 | 0.1 s | 4 indicators, 2 known_bad |
+| Investigator-Agent | mock | 7 | 8 | 0.1 s | 8 findings |
+| Reviewer-Agent | mock | 4 | 7 | 0.0 s | 6 confirmed, 1 disputed, 1 unreviewed |
+| Report & Human Review | mock | 5 | 0 | 0.8 s | malicious, risk 73, 2 techniques, 3 actions |
 
 Tool calls are the tools that ran, code lookups included; a repeat answered from the ledger isn't one. Duration is the time between handoffs, so it includes waiting for rate limits, and a reopen adds to it.
 
@@ -55,7 +55,7 @@ Indicators looked up:
 - `10690ecba328f4a4147dea539d9e4c9f28a8da25b8475bbd0c86e8b535673c06`: known_good (Signed system or vendor binary (WINWORD.EXE))
 - `acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047`: known_bad (Commodity loader)
 
-Injection scan: 0 flags across 167 texts (regex + classifier).
+Injection scan: 0 flags across 182 texts (regex + classifier).
 
 ## Key event timeline
 
@@ -81,7 +81,7 @@ Anomaly is the event's score_anomaly percentile among baseline events of the sam
 | F4 | confirmed | msupdate.exe was started by powershell.exe and is unsigned | evt_004052 |
 | F5 | confirmed | msupdate.exe connected to 203.0.113.116 on port 443 three times | evt_004054, evt_004087, evt_004127 |
 | F6 | unreviewed | invoice-portal.example is known_bad | tool:check_reputation#3 |
-| F7 | confirmed | No scheduled tasks were created on FIN-WS-02 | tool:get_persistence_events#18 |
+| F7 | confirmed | No scheduled tasks were created on FIN-WS-02 | tool:get_persistence_events#24 |
 
 "unreviewed" means the finding passed the grounding checks but the reviewer did not rule on it.
 
@@ -122,14 +122,14 @@ Nothing has been executed.
 
 ## Analyst decision
 
-The analyst **agreed** with the agent's verdict (malicious) at 2026-11-06T06:27:00Z.
+The analyst **agreed** with the agent's verdict (malicious) at 2026-11-06T09:12:28Z.
 
 Note: The chain matches the phishing report.
 
 ## Limitations
 
 - The agent recommends and a human decides; nothing in this report was executed.
-- Code checks that a benign verdict rests on a confirmed finding tied to the trigger, its parent or children, or an entity in the intel brief. It cannot check that the finding really supports the harmless explanation: the model picks which finding counts.
+- Code refuses a benign verdict if any indicator in the case is known_bad or any log text has an injection flag, and requires a confirmed finding tied to the trigger, its parent or children, or an entity in the intel brief. It cannot check that the finding really supports the harmless explanation: the model picks which finding counts.
 - Citation checks confirm that an event involves the entity named and that the acting process matches. They cannot confirm every other detail of a claim.
 - Not ruled on by the reviewer: F6.
 - The ATT&CK validator refused 1 proposal(s): T1999 is not a technique in ATT&CK v20

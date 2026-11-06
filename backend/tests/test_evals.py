@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.agent.agents.closure import INJECTION_FLAG_IN_CASE, KNOWN_BAD_IN_CASE
 from app.agent.case import Case, Evidence, InjectionFlag
 from app.agent.deps import MongoTelemetry
+from app.agent.mock_model import mock_model
 from app.api.routes import Services
 from app.api.runner import Runner
 from app.api.store import InMemoryStore
@@ -27,7 +28,6 @@ from app.tools import call_tool
 from evals.budget import FIRST_RUN_TOKENS, SpendLog, next_run_tokens
 from evals.common import append_jsonl, read_jsonl
 from evals.configs import BIG_MODEL, CONFIGS, SMALL_MODEL, EvalSettings, Tier
-from evals.mock_model import mock_model
 from evals.report import build_scoreboard, priority_auc, render_markdown, write_scoreboard
 from evals.run import Environment, run_batch, saved_runs, truth_for
 from evals.scoring import IntelCoverage, RunRecord, Truth, score_case, technique_credit
@@ -811,7 +811,7 @@ async def test_evals_latest_serves_the_same_scoreboard(tmp_path: Path) -> None:
     d, _, _ = deps()
     store = InMemoryStore()
     source = FakeSource([], [ALERT])
-    run = Runner(store, source, d.call_tool, d.settings, lambda _: d.llm)
+    run = Runner(store, source, d.call_tool, d.settings, lambda _, __: d.llm)
     services = Services(store, source, run, d.settings, tmp_path)
     app: Callable[..., Any] = create_app(lambda: services)
 

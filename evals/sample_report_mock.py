@@ -253,7 +253,7 @@ async def main_async() -> int:
         store = InMemoryStore()
         llm = MockLLM(script())
         tool = partial(call_tool, db=db)
-        runner = Runner(store, telemetry, tool, settings, lambda _: llm)
+        runner = Runner(store, telemetry, tool, settings, lambda _, __: llm)
         services = Services(store, telemetry, runner, settings, RESULTS)
         app = create_app(lambda: services)
         async with httpx.AsyncClient(

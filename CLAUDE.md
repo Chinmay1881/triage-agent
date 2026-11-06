@@ -22,8 +22,8 @@ Development is on Windows. No `make`; tasks run through a plain-Python `tasks.py
 - `python tasks.py train` — train the anomaly model (baseline seed 7, background only) and the injection classifier
 - `python tasks.py test` — backend tests
 - `python tasks.py lint` — ruff
-- `python tasks.py dev-api` — FastAPI on :8000
-- `python tasks.py dev-web` — Next.js on :3000 (from Phase 6)
+- `python tasks.py dev-api [--mock]` — FastAPI on :8000; `--mock` forces the scripted model, so no Groq calls
+- `python tasks.py dev-web` — Next.js on :3000
 - `uv run python -m app.cli investigate --alert <id>` — run one investigation in the terminal
 
 Windows notes: use `pathlib` for paths, never hard-coded `/` or `\`; keep shell-specific commands out of Python code; Mongo init scripts only run on a fresh volume, so after changing them run `docker compose down -v`.

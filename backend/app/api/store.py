@@ -10,7 +10,7 @@ InMemoryStore has the same interface, for tests and the offline sample report.
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from pymongo import ASCENDING, IndexModel
+from pymongo import ASCENDING, DESCENDING, IndexModel
 from pymongo.asynchronous.database import AsyncDatabase
 
 Doc = dict[str, Any]
@@ -23,7 +23,9 @@ class Store(Protocol):
 
     async def update_investigation(self, investigation_id: str, fields: Doc) -> None: ...
 
-    async def latest_status_by_alert(self) -> dict[str, str]: ...
+    async def latest_runs_by_alert(self) -> dict[str, Doc]: ...
+
+    async def list_investigations(self, limit: int) -> list[Doc]: ...
 
     async def mark_interrupted(self) -> int: ...
 
@@ -78,11 +80,17 @@ class MongoStore:
             {"investigation_id": investigation_id}, {"$set": fields}
         )
 
-    async def latest_status_by_alert(self) -> dict[str, str]:
+    async def latest_runs_by_alert(self) -> dict[str, Doc]:
         cursor = self._db.investigations.find(
-            {}, {"_id": 0, "alert_id": 1, "status": 1}, sort=[("created_at", ASCENDING)]
+            {}, {"_id": 0, "state": 0}, sort=[("created_at", ASCENDING)]
         )
-        return {doc["alert_id"]: doc["status"] async for doc in cursor}
+        return {doc["alert_id"]: doc async for doc in cursor}
+
+    async def list_investigations(self, limit: int) -> list[Doc]:
+        cursor = self._db.investigations.find(
+            {}, {"_id": 0, "state": 0}, sort=[("created_at", DESCENDING)], limit=limit
+        )
+        return [doc async for doc in cursor]
 
     async def mark_interrupted(self) -> int:
         result = await self._db.investigations.update_many(
@@ -136,9 +144,15 @@ class InMemoryStore:
     async def update_investigation(self, investigation_id: str, fields: Doc) -> None:
         self.investigations[investigation_id].update(fields)
 
-    async def latest_status_by_alert(self) -> dict[str, str]:
+    def _summaries(self) -> list[Doc]:
         ordered = sorted(self.investigations.values(), key=lambda d: d["created_at"])
-        return {d["alert_id"]: d["status"] for d in ordered}
+        return [{k: v for k, v in d.items() if k != "state"} for d in ordered]
+
+    async def latest_runs_by_alert(self) -> dict[str, Doc]:
+        return {d["alert_id"]: d for d in self._summaries()}
+
+    async def list_investigations(self, limit: int) -> list[Doc]:
+        return self._summaries()[::-1][:limit]
 
     async def mark_interrupted(self) -> int:
         active = [d for d in self.investigations.values() if d["status"] in ACTIVE]

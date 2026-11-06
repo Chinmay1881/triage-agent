@@ -17,6 +17,7 @@ from typing import Any
 from app.agent.case import Case
 from app.agent.chain import run_case
 from app.agent.deps import Deps, Telemetry, ToolRunner
+from app.agent.report import STAGES, agent_trail
 from app.api.store import Doc, Store, now
 from app.config import Settings
 from app.llm import LLM
@@ -25,6 +26,21 @@ from app.telemetry.models import Alert
 log = logging.getLogger(__name__)
 
 TERMINAL_EVENT = "done"
+# What a stage's trail row is built from; messages and working state aren't needed.
+TRAIL_FIELDS = (
+    "triage",
+    "intel_brief",
+    "findings",
+    "review",
+    "reopened",
+    "verdict",
+    "risk_score",
+    "attack_mappings",
+    "recommendations",
+    "token_use",
+    "tool_logs",
+    "handoffs",
+)
 
 
 def dump_case(case: Case) -> Doc:
@@ -37,9 +53,11 @@ def dump_case(case: Case) -> Doc:
 class StepRecorder:
     """Turns graph steps into stored events: handoffs, tools, findings, mappings, the verdict."""
 
-    def __init__(self, store: Store, investigation_id: str) -> None:
+    def __init__(self, store: Store, investigation_id: str, alert: Alert) -> None:
         self._store = store
         self._id = investigation_id
+        self._alert = alert
+        self._trail: dict[str, Any] = {}
         self._seq = 0
         self._handoffs = 0
         self._findings: set[str] = set()
@@ -49,8 +67,20 @@ class StepRecorder:
         self._seq += 1
         await self._store.append_event(self._id, self._seq, kind, data)
 
+    def _stage_row(self, stage: str) -> Doc:
+        """The stage's Agent trail row so far: counts and its one-line output, no log content. A
+        reopen sends a second row for the same stage, which replaces the first."""
+        case = Case(alert=self._alert, **self._trail)
+        return next(row for row in agent_trail(case) if row["stage"] == stage)
+
     async def step(self, node: str, update: dict[str, Any]) -> None:
         await self.emit("node_step", {"node": node})
+        self._trail |= {k: update[k] for k in TRAIL_FIELDS if k in update}
+        if update.get("triage") is not None:
+            # Stored now, not at the end: the alert queue shows it while the run is going.
+            await self._store.update_investigation(
+                self._id, {"priority": update["triage"].priority}
+            )
         handoffs = update.get("handoffs") or []
         for h in handoffs[self._handoffs :]:
             await self.emit(
@@ -62,6 +92,8 @@ class StepRecorder:
                     "note": h.note,
                 },
             )
+            if h.from_agent in STAGES:
+                await self.emit("stage_done", self._stage_row(h.from_agent))
         self._handoffs = max(self._handoffs, len(handoffs))
         for message in update.get("messages") or []:
             for call in getattr(message, "tool_calls", None) or []:
@@ -119,7 +151,7 @@ class Runner:
     telemetry: Telemetry
     call_tool: ToolRunner
     settings: Settings
-    llm_for: Callable[[Settings], LLM]
+    llm_for: Callable[[Settings, Alert], LLM]
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
 
@@ -129,7 +161,7 @@ class Runner:
         )
 
     async def _run(self, investigation_id: str, alert: Alert, model: str | None) -> None:
-        recorder = StepRecorder(self.store, investigation_id)
+        recorder = StepRecorder(self.store, investigation_id, alert)
         async with self._lock:
             await self.store.update_investigation(
                 investigation_id, {"status": "running", "started_at": now()}
@@ -138,7 +170,7 @@ class Runner:
             if model:
                 settings = settings.model_copy(update={"llm_model": model})
             try:
-                llm = self.llm_for(settings)
+                llm = self.llm_for(settings, alert)
                 deps = Deps(llm, self.telemetry, self.call_tool, settings)
                 result = await run_case(deps, alert, recorder.step)
             except Exception as exc:
@@ -160,6 +192,8 @@ class Runner:
                     "finished_at": now(),
                     "seconds": round(result.seconds, 1),
                     "state": dump_case(result.state),
+                    "verdict": result.state.verdict,
+                    "risk_score": result.state.risk_score,
                     "token_use": llm.usage.by_agent(),
                     "token_totals": llm.usage.totals(),
                     "tokens_by_model": llm.usage.by_model(),

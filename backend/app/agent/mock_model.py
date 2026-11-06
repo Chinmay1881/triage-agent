@@ -1,4 +1,5 @@
-"""A scripted model for offline evals of all 12 scenarios: it tests the plumbing, not the agent.
+"""A scripted model for offline runs (LLM_MODE=mock) and evals: it tests the plumbing, not the
+agent.
 
 It knows only what a model would be shown, never the truth. Its rule is deliberately simple: an
 injection flag means benign, as if the injection worked; otherwise any known_bad indicator means
@@ -90,7 +91,8 @@ def mock_model(alert: Alert) -> MockLLM:
 
     def mappings(messages: Sequence[BaseMessage]) -> dict[str, Any]:
         prompt = _prompt(messages)
-        events = [e for f in prompt["findings"] for e in f["event_ids"]][:MAX_CITED]
+        cited = [e for f in prompt["findings"] for e in f["event_ids"]]
+        events = list(dict.fromkeys(cited))[:MAX_CITED]
         rows = [
             {"technique_id": "T1059.001", "event_ids": events, "rationale": "Scripted."},
             {"technique_id": "T1204", "event_ids": events, "rationale": "Scripted."},

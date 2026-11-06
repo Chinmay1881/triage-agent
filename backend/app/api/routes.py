@@ -16,18 +16,20 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 from sse_starlette.sse import EventSourceResponse
 
-from app.agent.case import Case, Verdict
-from app.agent.report import render_report
+from app.agent.case import WITHHELD, Case, Verdict
+from app.agent.report import agent_trail, injection_line, render_report
 from app.api.runner import TERMINAL_EVENT, Runner
 from app.api.store import Doc, Store, now
-from app.blocklist import refusal
+from app.blocklist import is_blocked, refusal
 from app.config import Settings
+from app.telemetry.decode import decode_encoded_command
 from app.telemetry.models import Alert
 
 router = APIRouter()
 
 POLL_SECONDS = 0.5
 FINISHED = ("awaiting_decision", "decided")
+HISTORY_RUNS = 50
 RESULT_FILE = re.compile(r"^(?P<kind>[a-z0-9_]+?)(?:_\d{4}-\d{2}-\d{2})?\.json$")
 
 
@@ -68,17 +70,40 @@ InvestigationDep = Annotated[Doc, Depends(require_investigation)]
 # --- alerts ----------------------------------------------------------------------------------
 
 
-def alert_row(alert: Alert, status: str) -> Doc:
-    return alert.model_dump(mode="json") | {"status": status}
+def blocked_in_dev(alert_id: str, settings: Settings) -> bool:
+    return not settings.allow_blocked_alerts and is_blocked(alert_id)
+
+
+def alert_row(alert: Alert, latest: Doc | None, settings: Settings) -> Doc:
+    """A queue row. A blocked alert shows only what the queue needs to say it's blocked: its rule,
+    host, user and description belong to the scenario the dev tools never print."""
+    if blocked_in_dev(alert.alert_id, settings):
+        return {
+            "alert_id": alert.alert_id,
+            "severity": alert.severity,
+            "status": "blocked",
+            "blocked": True,
+            "priority": None,
+            "investigation_id": None,
+            "mock": False,
+        }
+    latest = latest or {}
+    return alert.model_dump(mode="json", exclude={"description"}) | {
+        "status": latest.get("status", "new"),
+        "blocked": False,
+        "priority": latest.get("priority"),
+        "investigation_id": latest.get("investigation_id"),
+        "mock": bool(latest.get("mock")),
+    }
 
 
 @router.get("/alerts")
 async def list_alerts(
     services: ServicesDep, severity: str | None = None, status: str | None = None
 ) -> list[Doc]:
-    statuses = await services.store.latest_status_by_alert()
+    latest = await services.store.latest_runs_by_alert()
     rows = [
-        alert_row(a, statuses.get(a.alert_id, "new"))
+        alert_row(a, latest.get(a.alert_id), services.settings)
         for a in await services.alerts.alerts()
         if severity is None or a.severity == severity
     ]
@@ -90,11 +115,14 @@ async def get_alert(alert_id: str, services: ServicesDep) -> Doc:
     alert = await services.alerts.alert(alert_id)
     if alert is None:
         raise HTTPException(404, f"no alert {alert_id}")
-    statuses = await services.store.latest_status_by_alert()
+    if blocked_in_dev(alert_id, services.settings):
+        raise HTTPException(403, f"{alert_id} is blocked in dev")
+    latest = await services.store.latest_runs_by_alert()
     call_tool = services.runner.call_tool
     host = await call_tool("get_host_info", {"host": alert.host})
     user = await call_tool("get_user_info", {"user": alert.user}) if alert.user else None
-    return alert_row(alert, statuses.get(alert_id, "new")) | {
+    return alert_row(alert, latest.get(alert_id), services.settings) | {
+        "description": alert.description,
         "host_info": host.get("untrusted_log_data"),
         "user_info": user.get("untrusted_log_data") if user else None,
     }
@@ -123,12 +151,16 @@ async def start_investigation(body: StartRequest, services: ServicesDep) -> Doc:
     if alert is None:
         raise HTTPException(404, f"no alert {body.alert_id}")
     investigation_id = uuid.uuid4().hex
+    mock = settings.llm_mode == "mock"
     await services.store.create_investigation(
         {
             "investigation_id": investigation_id,
             "alert_id": alert.alert_id,
+            "rule": alert.rule,
+            "host": alert.host,
             "status": "queued",
-            "model": body.model or settings.llm_model,
+            "mock": mock,
+            "model": "mock" if mock else body.model or settings.llm_model,
             "created_at": now(),
         }
     )
@@ -143,7 +175,10 @@ def public_view(doc: Doc, decisions: list[Doc]) -> Doc:
         for k in (
             "investigation_id",
             "alert_id",
+            "rule",
+            "host",
             "status",
+            "mock",
             "model",
             "error",
             "created_at",
@@ -182,9 +217,12 @@ def public_view(doc: Doc, decisions: list[Doc]) -> Doc:
             agent: [r.model_dump() for r in rows] for agent, rows in case.tool_logs.items()
         },
         "token_use": case.token_use,
+        "agent_trail": agent_trail(case),
         "injection_flags": [
             {"event_id": f.event_id, "method": f.method} for f in case.evidence.injection_flags
         ],
+        "texts_scanned": case.evidence.texts_scanned,
+        "injection_line": injection_line(case.evidence),
         "attack_mappings": [m.model_dump() for m in case.attack_mappings],
         "verdict_proposed": case.verdict_proposed,
         "verdict": case.verdict,
@@ -196,6 +234,12 @@ def public_view(doc: Doc, decisions: list[Doc]) -> Doc:
         "recommendations": [r.model_dump() for r in case.recommendations],
         "timeline": case.timeline,
     }
+
+
+@router.get("/investigations")
+async def list_investigations(services: ServicesDep) -> list[Doc]:
+    """Past runs, newest first, so a finished one can be reopened and replayed."""
+    return await services.store.list_investigations(HISTORY_RUNS)
 
 
 @router.get("/investigations/{investigation_id}")
@@ -211,6 +255,43 @@ async def get_report(doc: InvestigationDep, services: ServicesDep) -> PlainTextR
     # Rendered on request, so the report always shows the decisions recorded so far.
     report = render_report(Case.model_validate(doc["state"]), decisions)
     return PlainTextResponse(report, media_type="text/markdown; charset=utf-8")
+
+
+def cited_events(case: Case) -> set[str]:
+    """The events this investigation shows or cites: the only ones its drawer may open."""
+    cited = {c for f in case.findings for c in f.event_ids} | set(case.alert.trigger_event_ids)
+    cited |= {e for m in case.attack_mappings for e in m.event_ids}
+    cited |= {str(row["event_id"]) for row in case.timeline if row.get("event_id")}
+    if case.intel_brief is not None:
+        chain = case.intel_brief.process_chain
+        cited |= {str(row["event_id"]) for row in chain if row.get("event_id")}
+    return cited
+
+
+@router.get("/investigations/{investigation_id}/raw-event/{event_id}")
+async def get_raw_event(event_id: str, doc: InvestigationDep, services: ServicesDep) -> Doc:
+    """One event for the side drawer, not a query tool: it serves only events this run cites. An
+    event with an injection flag loses its log text here too, as it does in the report."""
+    if blocked_in_dev(doc["alert_id"], services.settings):
+        raise HTTPException(403, f"{doc['alert_id']} is blocked in dev")
+    if not doc.get("state"):
+        raise HTTPException(409, "events open once the run has finished")
+    case = Case.model_validate(doc["state"])
+    if event_id not in cited_events(case):
+        raise HTTPException(404, f"{event_id} is not cited by this investigation")
+    events = await services.runner.telemetry.events([event_id])
+    if not events:
+        raise HTTPException(404, f"no event {event_id}")
+    event = events[0]
+    summary = {k: event.get(k) for k in ("event_id", "ts", "host", "user", "event_type")}
+    if event_id in {f.event_id for f in case.evidence.injection_flags}:
+        return summary | {"injection_flagged": True, "withheld": WITHHELD}
+    decoded = decode_encoded_command((event.get("process") or {}).get("cmdline") or "")
+    return summary | {
+        "injection_flagged": False,
+        "untrusted_log_data": event,
+        "decoded_cmdline": decoded,
+    }
 
 
 # --- SSE -------------------------------------------------------------------------------------
@@ -267,6 +348,8 @@ class DecisionRequest(BaseModel):
             raise ValueError("give action_id and decision, or verdict_decision")
         if (self.verdict_decision == "override") != (self.override_verdict is not None):
             raise ValueError("override_verdict goes with verdict_decision override, and only then")
+        if self.verdict_decision == "override" and not self.note.strip():
+            raise ValueError("an override needs a note saying why")
         return self
 
 
@@ -341,6 +424,15 @@ async def record_decision(
     status = status_after(case, [*decided, *records])
     await store.update_investigation(investigation_id, {"status": status})
     return {"status": status, "recorded": records}
+
+
+# --- meta ------------------------------------------------------------------------------------
+
+
+@router.get("/meta")
+async def meta(services: ServicesDep) -> Doc:
+    """What the dashboard's header needs to say which mode this server runs in."""
+    return {"mock": services.settings.llm_mode == "mock"}
 
 
 # --- evals -----------------------------------------------------------------------------------

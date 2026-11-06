@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pymongo import AsyncMongoClient
 from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 
@@ -21,10 +22,19 @@ from app.api.runner import Runner, dump_case
 from app.api.store import InMemoryStore, MongoStore, now
 from app.config import get_settings
 from app.llm import LLMError, MockLLM
-from app.main import create_app
+from app.main import create_app, llm_for
 from app.ml.injection import InjectionModel
 from app.telemetry.models import Alert
-from tests.test_agent_graph import ALERT, PLANTED, TRIGGER, FakeTelemetry, deps, process_doc
+from scripts.gen.scenario import encode_powershell
+from tests.test_agent_graph import (
+    ALERT,
+    PLANTED,
+    REOPEN,
+    TRIGGER,
+    FakeTelemetry,
+    deps,
+    process_doc,
+)
 
 BLOCKED = "alt_0099"
 BLOCKED_ALERT = ALERT.model_copy(update={"alert_id": BLOCKED, "severity": "low"})
@@ -61,7 +71,7 @@ class Harness:
         )
         self.seen_settings: list[Any] = []
 
-        def default_llm_for(s: Any) -> MockLLM:
+        def default_llm_for(s: Any, _: Alert) -> MockLLM:
             self.seen_settings.append(s)
             return llm
 
@@ -155,10 +165,10 @@ async def test_alert_queue_filters_by_severity_and_status() -> None:
 
     assert {a["alert_id"]: a["status"] for a in everything} == {
         "alt_0001": "awaiting_decision",
-        BLOCKED: "new",
+        BLOCKED: "blocked",
     }
     assert [a["alert_id"] for a in high] == ["alt_0001"]
-    assert [a["alert_id"] for a in fresh] == [BLOCKED]
+    assert fresh == []
 
 
 async def test_one_alert_comes_with_host_and_user_info() -> None:
@@ -225,7 +235,7 @@ async def test_a_run_ends_waiting_for_the_analyst() -> None:
 
 
 async def test_the_requested_model_is_used_for_that_run_only() -> None:
-    h = Harness()
+    h = Harness(llm_mode="real")
 
     investigation_id = await h.finished_run(model="openai/gpt-oss-20b")
 
@@ -245,7 +255,7 @@ async def test_runs_go_one_at_a_time() -> None:
 
 
 async def test_a_run_that_dies_ends_as_failed_with_a_reason() -> None:
-    def broken(settings: Any) -> Any:
+    def broken(settings: Any, alert: Any) -> Any:
         raise LLMError("GROQ_API_KEY is not set in .env")
 
     h = Harness(llm_for=broken)
@@ -432,7 +442,7 @@ async def test_agreement_can_be_counted_from_the_records() -> None:
     h = Harness()
     first, second = await h.finished_run(), await h.finished_run()
     await h.decide(first, verdict_decision="agree")
-    await h.decide(second, verdict_decision="override", override_verdict="suspicious")
+    await h.decide(second, verdict_decision="override", override_verdict="suspicious", note="n")
 
     verdicts = [d for d in h.store.decision_log if d["kind"] == "verdict"]
 
@@ -504,7 +514,7 @@ async def test_decisions_are_never_rewritten() -> None:
 
     again_action = await h.decide(investigation_id, action_id="A1", decision="reject")
     again_verdict = await h.decide(
-        investigation_id, verdict_decision="override", override_verdict="benign"
+        investigation_id, verdict_decision="override", override_verdict="benign", note="n"
     )
 
     assert again_action.status_code == 409 and again_verdict.status_code == 409
@@ -527,7 +537,7 @@ async def test_overriding_to_the_same_verdict_is_refused() -> None:
     investigation_id = await h.finished_run()
 
     response = await h.decide(
-        investigation_id, verdict_decision="override", override_verdict="malicious"
+        investigation_id, verdict_decision="override", override_verdict="malicious", note="n"
     )
 
     assert response.status_code == 422
@@ -660,7 +670,7 @@ async def test_mongo_store_round_trip(mongo_store: tuple[MongoStore, str]) -> No
     assert [e["seq"] for e in await store.events_after(investigation_id, 1)] == [2]
     (decision,) = await store.decisions(investigation_id)
     assert decision["agreed"] is True and "_id" not in decision
-    assert (await store.latest_status_by_alert())["alt_test"] == "awaiting_decision"
+    assert (await store.latest_runs_by_alert())["alt_test"]["status"] == "awaiting_decision"
 
 
 @pytest.mark.mongo
@@ -704,3 +714,209 @@ async def test_a_stored_case_survives_mongo(mongo_store: tuple[MongoStore, str])
 
 def test_dump_case_is_json_ready() -> None:
     assert json.dumps(dump_case(Case(alert=ALERT)))
+
+
+# --- the dashboard's data --------------------------------------------------------------------
+
+
+async def test_a_mock_run_says_so_on_its_record_and_its_view() -> None:
+    h = Harness()
+
+    investigation_id = await h.finished_run()
+
+    view = await h.view(investigation_id)
+    assert view["mock"] is True and view["model"] == "mock"
+    assert (await h.client.get("/meta")).json() == {"mock": True}
+
+
+async def test_a_real_run_is_not_marked_mock() -> None:
+    h = Harness(llm_mode="real")
+
+    view = await h.view(await h.finished_run())
+
+    assert view["mock"] is False and view["model"] == "openai/gpt-oss-120b"
+    assert (await h.client.get("/meta")).json() == {"mock": False}
+
+
+async def test_the_app_factory_uses_the_scripted_model_only_in_mock_mode() -> None:
+    settings = get_settings()
+
+    assert isinstance(llm_for(settings.model_copy(update={"llm_mode": "mock"}), ALERT), MockLLM)
+    assert not isinstance(
+        llm_for(
+            settings.model_copy(update={"llm_mode": "real", "groq_api_key": SecretStr("x")}),
+            ALERT,
+        ),
+        MockLLM,
+    )
+
+
+async def test_a_queue_row_has_the_latest_run_and_no_description() -> None:
+    h = Harness()
+    investigation_id = await h.finished_run()
+
+    rows = {a["alert_id"]: a for a in (await h.client.get("/alerts")).json()}
+
+    row = rows["alt_0001"]
+    assert row["investigation_id"] == investigation_id and row["priority"] == "P2"
+    assert row["blocked"] is False and row["mock"] is True and "description" not in row
+
+
+async def test_a_blocked_alert_shows_only_that_it_is_blocked() -> None:
+    h = Harness()
+
+    rows = {a["alert_id"]: a for a in (await h.client.get("/alerts")).json()}
+
+    assert rows[BLOCKED] == {
+        "alert_id": BLOCKED,
+        "severity": "low",
+        "status": "blocked",
+        "blocked": True,
+        "priority": None,
+        "investigation_id": None,
+        "mock": False,
+    }
+    assert (await h.client.get(f"/alerts/{BLOCKED}")).status_code == 403
+    assert (await h.client.post("/investigations", json={"alert_id": BLOCKED})).status_code == 403
+
+
+async def test_the_priority_is_stored_as_soon_as_triage_decides() -> None:
+    h = Harness()
+    investigation_id = await h.finished_run()
+
+    doc = await h.store.get_investigation(investigation_id)
+
+    assert doc is not None and doc["priority"] == "P2"
+
+
+async def test_finished_runs_are_listed_newest_first_without_their_state() -> None:
+    h = Harness()
+    first = await h.finished_run()
+    second = await h.finished_run()
+
+    rows = (await h.client.get("/investigations")).json()
+
+    assert [r["investigation_id"] for r in rows] == [second, first]
+    assert rows[0]["verdict"] == "malicious" and rows[0]["rule"] == ALERT.rule
+    assert rows[0]["risk_score"] is not None and "state" not in rows[0]
+
+
+async def test_each_stage_ticks_in_over_sse_with_its_output() -> None:
+    h = Harness()
+    investigation_id = await h.finished_run()
+
+    events = await h.store.events_after(investigation_id, 0)
+
+    stages = [e["data"] for e in events if e["kind"] == "stage_done"]
+    assert [s["stage"] for s in stages] == [
+        "Sentinel-Triage",
+        "CyberIntel-Agent",
+        "Investigator-Agent",
+        "Reviewer-Agent",
+        "Report & Human Review",
+    ]
+    assert stages[0]["output"] == "P2 endpoint" and stages[0]["duration"].endswith(" s")
+    assert stages[2]["output"] == "1 finding"
+    assert stages[3]["output"] == "1 confirmed, 0 disputed"
+    assert stages[4]["output"].startswith("malicious, risk ")
+
+
+async def test_a_reopen_sends_a_second_row_for_the_same_stage() -> None:
+    h = Harness({"review_verdict": [REOPEN]})
+    investigation_id = await h.finished_run()
+
+    events = await h.store.events_after(investigation_id, 0)
+
+    stages = [e["data"]["stage"] for e in events if e["kind"] == "stage_done"]
+    assert stages.count("Investigator-Agent") == 2 and stages.count("Reviewer-Agent") == 2
+
+
+async def test_the_view_has_the_trail_and_the_scan_line() -> None:
+    h = Harness()
+
+    view = await h.view(await h.finished_run())
+
+    assert view["agent_trail"][0]["stage"] == "Sentinel-Triage"
+    assert view["agent_trail"][0]["models"] == "mock"
+    assert view["texts_scanned"] > 0 and view["injection_line"].startswith(
+        "Injection scan: 0 flags"
+    )
+
+
+async def test_the_drawer_serves_a_cited_event_and_nothing_else() -> None:
+    h = Harness()
+    investigation_id = await h.finished_run()
+    url = f"/investigations/{investigation_id}/raw-event"
+
+    cited = await h.client.get(f"{url}/{TRIGGER}")
+    uncited = await h.client.get(f"{url}/evt_999999")
+
+    assert cited.status_code == 200 and cited.json()["injection_flagged"] is False
+    assert cited.json()["untrusted_log_data"]["event_id"] == TRIGGER
+    assert uncited.status_code == 404
+
+
+async def test_the_drawer_withholds_a_flagged_events_log_text() -> None:
+    h = Harness(docs=[process_doc(TRIGGER, f"cmd /c echo {PLANTED}")])
+    investigation_id = await h.finished_run()
+
+    response = await h.client.get(f"/investigations/{investigation_id}/raw-event/{TRIGGER}")
+
+    body = response.json()
+    assert body["injection_flagged"] is True and "withheld" in body["withheld"]
+    assert PLANTED[:30] not in response.text and "untrusted_log_data" not in body
+
+
+async def test_the_drawer_decodes_an_encoded_command() -> None:
+    cmdline = f"powershell.exe -enc {encode_powershell('Write-Output hello')}"
+    h = Harness(docs=[process_doc(TRIGGER, cmdline)])
+    investigation_id = await h.finished_run()
+
+    response = await h.client.get(f"/investigations/{investigation_id}/raw-event/{TRIGGER}")
+
+    assert response.json()["decoded_cmdline"] == "Write-Output hello"
+
+
+async def test_the_drawer_waits_for_a_finished_run() -> None:
+    h = Harness()
+    await h.store.create_investigation(
+        {"investigation_id": "x", "alert_id": "alt_0001", "status": "running", "created_at": now()}
+    )
+
+    response = await h.client.get(f"/investigations/x/raw-event/{TRIGGER}")
+
+    assert response.status_code == 409
+
+
+async def test_an_override_needs_a_note() -> None:
+    h = Harness()
+    investigation_id = await h.finished_run()
+
+    without = await h.decide(
+        investigation_id, verdict_decision="override", override_verdict="benign", note="  "
+    )
+    agree = await h.decide(investigation_id, verdict_decision="agree")
+
+    assert without.status_code == 422 and agree.status_code == 201
+
+
+@pytest.mark.mongo
+async def test_a_finished_run_stays_in_mongo_with_its_events(
+    mongo_store: tuple[MongoStore, str],
+) -> None:
+    store, investigation_id = mongo_store
+    await store.create_investigation(
+        {
+            "investigation_id": investigation_id,
+            "alert_id": "alt_test",
+            "status": "awaiting_decision",
+            "mock": True,
+            "created_at": now(),
+        }
+    )
+    await store.append_event(investigation_id, 1, "stage_done", {"stage": "Sentinel-Triage"})
+
+    listed = await store.list_investigations(50)
+
+    assert investigation_id in [d["investigation_id"] for d in listed]
+    assert (await store.events_after(investigation_id, 0))[0]["kind"] == "stage_done"

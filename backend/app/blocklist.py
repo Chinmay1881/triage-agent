@@ -19,6 +19,10 @@ def blocked_alerts(path: Path) -> set[str] | None:
     return set(json.loads(path.read_text(encoding="utf-8"))["alert_ids"])
 
 
+def is_blocked(alert_id: str) -> bool:
+    return alert_id in (blocked_alerts(BLOCKLIST) or set())
+
+
 def refusal(alert_id: str, path: Path | None = None) -> str | None:
     """Why this alert may not run, or None if it may."""
     path = path or BLOCKLIST
