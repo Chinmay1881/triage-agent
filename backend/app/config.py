@@ -14,6 +14,8 @@ SENTINEL_TRIAGE = "Sentinel-Triage"
 CYBERINTEL = "CyberIntel-Agent"
 INVESTIGATOR = "Investigator-Agent"
 REVIEWER = "Reviewer-Agent"
+# Step 5 of the flow: not a fifth agent but the code-checked closing stage after review.
+REPORT_AND_REVIEW = "Report & Human Review"
 # Which agent each LLM-calling node belongs to, for per-agent models and token accounting.
 NODE_AGENT: dict[str, str] = {
     "triage": SENTINEL_TRIAGE,
@@ -24,6 +26,10 @@ NODE_AGENT: dict[str, str] = {
     "summarize_findings": INVESTIGATOR,
     "review": REVIEWER,
     "review_verdict": REVIEWER,
+    "map_attack": REPORT_AND_REVIEW,
+    "assess": REPORT_AND_REVIEW,
+    "recommend": REPORT_AND_REVIEW,
+    "report_summary": REPORT_AND_REVIEW,
 }
 
 
@@ -40,7 +46,11 @@ class Settings(BaseSettings):
     agent_models: dict[str, str] = {
         SENTINEL_TRIAGE: "openai/gpt-oss-20b",
         CYBERINTEL: "openai/gpt-oss-20b",
+        REPORT_AND_REVIEW: "openai/gpt-oss-20b",
     }
+    # Nodes that use llm_model whatever their agent's model is: assess is the judgement call,
+    # while code checks protect the other closing steps.
+    main_model_nodes: list[str] = ["assess"]
     llm_mode: Literal["real", "mock"] = "real"
     # Per node: the nodes that decide what to check or judge the evidence think harder; the ones
     # that write structure from given material stay cheap. Reasoning tokens count against the
@@ -54,6 +64,10 @@ class Settings(BaseSettings):
         "summarize_findings": "low",
         "review": "medium",
         "review_verdict": "medium",
+        "map_attack": "low",
+        "assess": "medium",
+        "recommend": "low",
+        "report_summary": "low",
     }
     llm_max_tokens: int = 2048
     # Groq free tier for the gpt-oss models: 8,000 tokens a minute, per model
@@ -68,6 +82,7 @@ class Settings(BaseSettings):
     investigator_budgets: dict[str, int] = {"P1": 12, "P2": 10, "P3": 8, "P4": 8}
     intel_tool_calls: int = 4
     reviewer_tool_calls: int = 3
+    mapping_retries: int = 2
     run_timeout_s: int = 900
     recursion_limit: int = 80
 
@@ -81,11 +96,22 @@ class Settings(BaseSettings):
     # they cost budget again, so a model repeating itself can't loop on free calls (hard rule 8).
     free_repeats_per_agent: int = 3
 
+    # Models POST /investigations may ask for.
+    api_models: list[str] = [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+    ]
+    # The API refuses blocklisted alerts unless this is on (the eval harness, a demo).
+    allow_blocked_alerts: bool = False
+
     # SecretStr because the URIs embed passwords; they never show up in logs or reprs.
     telemetry_mongo_uri: SecretStr
     triage_mongo_uri: SecretStr
 
     def model_for(self, node: str) -> str:
+        if node in self.main_model_nodes:
+            return self.llm_model
         return self.agent_models.get(NODE_AGENT.get(node, ""), self.llm_model)
 
 

@@ -41,7 +41,14 @@ from app.agent.chain import RunResult, build_chain, build_investigator, run_case
 from app.agent.deps import Deps
 from app.agent.injection import scan_tool_result, screen
 from app.agent.prompts.summarize import SUMMARIZE
-from app.config import CYBERINTEL, INVESTIGATOR, REVIEWER, SENTINEL_TRIAGE, get_settings
+from app.config import (
+    CYBERINTEL,
+    INVESTIGATOR,
+    REPORT_AND_REVIEW,
+    REVIEWER,
+    SENTINEL_TRIAGE,
+    get_settings,
+)
 from app.llm import InvalidToolCallError, LLMError, MockLLM
 from app.ml.injection import InjectionModel
 from app.telemetry.models import Alert
@@ -237,6 +244,20 @@ VERDICT = {
     "reason": "Enough evidence.",
 }
 REOPEN = VERDICT | {"reopen": True, "missing_checks": ["get_dns_queries for msupdate.exe"]}
+MAPPINGS = {
+    "mappings": [{"technique_id": "T1059.001", "event_ids": [TRIGGER], "rationale": "PowerShell."}]
+}
+ASSESSED = {
+    "verdict": "malicious",
+    "confidence": 0.9,
+    "reasoning": "F1 shows Word starting PowerShell.",
+    "supporting_benign": [],
+}
+RECOMMENDED = {
+    "recommendations": [
+        {"action": "isolate_host", "target": "FIN-WS-01", "reason": "Contain the host."}
+    ]
+}
 
 
 def deps(
@@ -254,6 +275,10 @@ def deps(
         "summarize_findings": [FINDINGS],
         "review": [AIMessage("Nothing to verify.")],
         "review_verdict": [VERDICT],
+        "map_attack": [MAPPINGS],
+        "assess": [ASSESSED],
+        "recommend": [RECOMMENDED],
+        "report_summary": [{"summary": "PowerShell ran from Word."}],
     }
     llm = MockLLM(defaults | (script or {}))
     s = get_settings().model_copy(update=settings)
@@ -283,7 +308,18 @@ def test_chain_has_the_four_agents() -> None:
     nodes = set(build_chain(d).get_graph().nodes) - {"__start__", "__end__"}
     inner = set(build_investigator(d).get_graph().nodes) - {"__start__", "__end__"}
 
-    assert nodes == {"sentinel_triage", "cyberintel", "investigator", "reviewer"}
+    assert nodes == {
+        "sentinel_triage",
+        "cyberintel",
+        "investigator",
+        "reviewer",
+        "map_attack",
+        "validate_mapping",
+        "assess",
+        "score",
+        "recommend",
+        "report",
+    }
     assert inner == {"plan", "investigate", "run_tools", "check_coverage", "summarize_findings"}
 
 
@@ -298,13 +334,20 @@ async def test_full_chain_hands_off_in_order_and_logs_every_handoff() -> None:
         (SENTINEL_TRIAGE, CYBERINTEL),
         (CYBERINTEL, INVESTIGATOR),
         (INVESTIGATOR, REVIEWER),
-        (REVIEWER, "report"),
+        (REVIEWER, REPORT_AND_REVIEW),
+        (REPORT_AND_REVIEW, "analyst"),
     ]
     assert all(h.ts.tzinfo is not None for h in state.handoffs)
     timestamps = [h.ts for h in state.handoffs]
     assert timestamps == sorted(timestamps)
     assert state.triage is not None and state.intel_brief is not None and state.review is not None
-    assert set(state.token_use) == {SENTINEL_TRIAGE, CYBERINTEL, INVESTIGATOR, REVIEWER}
+    assert set(state.token_use) == {
+        SENTINEL_TRIAGE,
+        CYBERINTEL,
+        INVESTIGATOR,
+        REVIEWER,
+        REPORT_AND_REVIEW,
+    }
     assert set(state.tool_logs) >= {SENTINEL_TRIAGE, CYBERINTEL, INVESTIGATOR}
     assert {s.split("#")[0] for s in state.evidence.tool_refs} >= {"tool:score_anomaly"}
     assert llm.tools["investigate"] == sorted(INVESTIGATOR_TOOLS, key=list(TOOLS).index)
@@ -317,7 +360,8 @@ async def test_steps_are_reported_from_inside_the_investigator() -> None:
     await run_case(d, ALERT, lambda node, update: seen.append(node))
 
     assert seen[:3] == ["sentinel_triage", "cyberintel", "plan"]
-    assert "summarize_findings" in seen and "investigator" not in seen and seen[-1] == "reviewer"
+    assert "summarize_findings" in seen and "reviewer" in seen and "investigator" not in seen
+    assert seen[-6:] == ["map_attack", "validate_mapping", "assess", "score", "recommend", "report"]
 
 
 async def test_timeout_returns_partial_state() -> None:
@@ -1294,7 +1338,7 @@ async def test_reviewer_reopens_at_most_once() -> None:
     assert state.review is not None and state.review.passes == 2
     hops = [(h.from_agent, h.to_agent, h.note) for h in state.handoffs]
     assert (REVIEWER, INVESTIGATOR, "reopen") in hops
-    assert hops[-1][:2] == (REVIEWER, "report")
+    assert hops[-2][:2] == (REVIEWER, REPORT_AND_REVIEW)
     # The plan isn't repeated, and the reviewer's checks reach the investigator.
     assert len(llm.prompts["plan"]) == 1
     assert any(

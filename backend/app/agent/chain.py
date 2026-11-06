@@ -1,8 +1,14 @@
 """The agent chain, built by hand (no prebuilt agents):
 
-    START -> Sentinel-Triage -> CyberIntel-Agent -> Investigator-Agent -> Reviewer-Agent -> END
+    START -> Sentinel-Triage -> CyberIntel-Agent -> Investigator-Agent -> Reviewer-Agent
                                                             ^                   |
                                                             +---- reopen, once -+
+    Reviewer-Agent -> Report & Human Review -> END (the run then waits for the analyst)
+
+Report & Human Review:
+
+    map_attack -> validate_mapping -> map_attack (at most 2 retries) or assess
+    assess -> score -> recommend -> report
 
 Investigator-Agent is a compiled subgraph with the same Case schema:
 
@@ -21,9 +27,10 @@ handoff is logged in Case.handoffs so the API can stream it.
 """
 
 import asyncio
+import inspect
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +38,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agent.agents.closure import make_closure
 from app.agent.agents.intel import make_intel
 from app.agent.agents.investigator import make_investigator
 from app.agent.agents.reviewer import make_reviewer
@@ -66,7 +74,11 @@ def after_check_coverage(state: Case) -> str:
 
 
 def after_review(state: Case) -> str:
-    return INVESTIGATOR_NODE if state.stop_reason is None else END
+    return INVESTIGATOR_NODE if state.stop_reason is None else "map_attack"
+
+
+def after_validate_mapping(state: Case) -> str:
+    return "map_attack" if state.mapping_retry else "assess"
 
 
 def build_investigator(deps: Deps) -> CompiledStateGraph:
@@ -96,11 +108,22 @@ def build_chain(deps: Deps) -> CompiledStateGraph:
     graph.add_edge(TRIAGE_NODE, INTEL_NODE)
     graph.add_edge(INTEL_NODE, INVESTIGATOR_NODE)
     graph.add_edge(INVESTIGATOR_NODE, REVIEWER_NODE)
-    graph.add_conditional_edges(REVIEWER_NODE, after_review, [INVESTIGATOR_NODE, END])
+    graph.add_conditional_edges(REVIEWER_NODE, after_review, [INVESTIGATOR_NODE, "map_attack"])
+    for name, node in make_closure(deps).items():
+        graph.add_node(name, node)
+    graph.add_edge("map_attack", "validate_mapping")
+    graph.add_conditional_edges(
+        "validate_mapping", after_validate_mapping, ["map_attack", "assess"]
+    )
+    graph.add_edge("assess", "score")
+    graph.add_edge("score", "recommend")
+    graph.add_edge("recommend", "report")
+    graph.add_edge("report", END)
     return graph.compile()
 
 
-OnStep = Callable[[str, dict[str, Any]], None]
+# on_step may be async, so the API can store each step as it happens.
+OnStep = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 
 
 @dataclass
@@ -130,7 +153,9 @@ async def run_case(deps: Deps, alert: Alert, on_step: OnStep | None = None) -> R
                 for node, update in chunk.items():
                     # The parent's view of the subgraph repeats what its nodes already reported.
                     if node != INVESTIGATOR_NODE:
-                        on_step(node, update or {})
+                        outcome = on_step(node, update or {})
+                        if inspect.isawaitable(outcome):
+                            await outcome
 
     timed_out = False
     try:

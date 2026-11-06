@@ -30,6 +30,7 @@ from app.cli import print_step, print_summary  # noqa: E402
 from app.config import (  # noqa: E402
     CYBERINTEL,
     INVESTIGATOR,
+    REPORT_AND_REVIEW,
     REVIEWER,
     SENTINEL_TRIAGE,
     Settings,
@@ -119,7 +120,7 @@ async def main_async(label: str, commit: str) -> int:
         "code_commit": commit,
         "models": {
             agent: settings.agent_models.get(agent, settings.llm_model)
-            for agent in (SENTINEL_TRIAGE, CYBERINTEL, INVESTIGATOR, REVIEWER)
+            for agent in (SENTINEL_TRIAGE, CYBERINTEL, INVESTIGATOR, REVIEWER, REPORT_AND_REVIEW)
         },
         "reasoning_effort": settings.llm_reasoning_effort,
         "tool_schema_tokens_per_call": {

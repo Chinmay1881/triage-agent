@@ -1,0 +1,157 @@
+# Triage report: {{ alert.alert_id }}
+
+## Summary
+
+{{ summary }}
+
+## Alert
+
+| Field | Value |
+| --- | --- |
+| Rule | {{ alert.rule | cell }} |
+| Severity | {{ alert.severity }} |
+| Time | {{ alert_ts }} |
+| Host | {{ alert.host | cell }} |
+| User | {{ (alert.user or "none") | cell }} |
+| Trigger events | {{ alert.trigger_event_ids | join(", ") }} |
+
+## Triage decision
+
+{% if triage %}
+**{{ triage.priority }}, {{ triage.category }}.** {{ triage.reason | cell }}
+
+Investigator budget: {{ budget_reason | cell }}. Calls used: {{ tool_calls_used }}.
+{% else %}
+Triage did not complete.
+{% endif %}
+
+## Intel brief
+
+{% if brief %}
+{% if brief.assessment %}
+{{ brief.assessment | cell(600) }}
+
+{% endif %}
+{% if brief.process_chain %}
+| Role | Process | Signer | Reputation | Event |
+| --- | --- | --- | --- | --- |
+{% for row in brief.process_chain %}
+| {{ row.role }} | {{ row.name | cell }} | {{ (row.signer or "unsigned") | cell }} | {{ row.get("reputation") or "not checked" }} | {{ row.get("event_id") or "" }} |
+{% endfor %}
+
+{% endif %}
+{% if indicators %}
+Indicators looked up:
+
+{% for row in indicators %}
+- `{{ row.indicator | cell }}`: {{ row.get("reputation") }}{% if row.get("description") %} ({{ row.description | cell }}){% endif %}
+
+{% endfor %}
+{% endif %}
+{% else %}
+No intel brief.
+{% endif %}
+
+## Key event timeline
+
+{% if timeline %}
+| Time (UTC) | Event | Type | Process | Parent | Target |
+| --- | --- | --- | --- | --- | --- |
+{% for row in timeline %}
+| {{ row.ts }} | {{ row.event_id }} | {{ row.event_type }} | {{ (row.process or "") | cell }} | {{ (row.parent or "") | cell }} | {{ (row.target or "") | cell }} |
+{% endfor %}
+{% else %}
+No events to show.
+{% endif %}
+
+## Findings
+
+{% if findings %}
+| ID | Status | Finding | Evidence |
+| --- | --- | --- | --- |
+{% for f in findings %}
+| {{ f.id }} | {{ f.status }} | {{ f.shown_claim() | cell(400) }} | {{ f.citations | join(", ") }} |
+{% endfor %}
+
+{% if findings | selectattr("status", "equalto", "unreviewed") | list %}
+"unreviewed" means the finding passed the grounding checks but the reviewer did not rule on it.
+{% endif %}
+{% else %}
+No findings reached the report.
+{% endif %}
+{% if disputed_count %}
+
+{{ disputed_count }} disputed finding(s) were left out.
+{% endif %}
+
+## ATT&CK mapping
+
+{% if mappings %}
+| Technique | Tactics | Evidence | Rationale |
+| --- | --- | --- | --- |
+{% for m in mappings %}
+| [{{ m.technique_id }} {{ m.name | cell }}]({{ m.technique_id | attack_url }}) | {{ m.tactics | join(", ") }} | {{ m.event_ids | join(", ") }} | {{ m.rationale | cell }} |
+{% endfor %}
+{% else %}
+No techniques mapped.
+{% endif %}
+
+## Verdict and risk
+
+**Verdict: {{ verdict or "none" }}**{% if confidence is not none %} (confidence {{ "%.2f" | format(confidence) }}){% endif %}.
+{% if reasoning %}
+{{ reasoning | cell(600) }}
+{% endif %}
+{% for note in verdict_notes %}
+
+- Code rule: {{ note | cell(300) }}
+{% endfor %}
+
+{% if risk %}
+**Risk score: {{ risk.score }} / 100**
+
+| Part | Input | Points |
+| --- | --- | --- |
+| Verdict x (0.5 + 0.5 x confidence) | {{ risk.verdict }}, {{ "%.2f" | format(risk.confidence) }} | {{ risk.verdict_points }} |
+| Triage priority | {{ risk.priority }} | {{ risk.priority_points }} |
+| Asset criticality | {{ risk.criticality }}{% if risk.criticality_assumed %} (assumed: not in the inventory){% endif %} | {{ risk.criticality_points }} |
+| High-impact tactics | {{ risk.high_impact_tactics | join(", ") or "none" }} | {{ risk.tactic_points }} |
+
+Formula: {{ risk.formula }}.
+{% endif %}
+
+## Recommended actions pending analyst approval
+
+{% if actions %}
+Nothing has been executed.
+
+| ID | Action | Target | Reason | Analyst decision |
+| --- | --- | --- | --- | --- |
+{% for row in actions %}
+| {{ row.id }} | {{ row.action }} | {{ row.target | cell }} | {{ row.reason | cell }} | {{ row.status | cell(300) }} |
+{% endfor %}
+{% else %}
+None.
+{% endif %}
+
+## Analyst decision
+
+{% if verdict_decision %}
+{% if verdict_decision.agreed %}
+The analyst **agreed** with the agent's verdict ({{ verdict_decision.agent_verdict }}) at {{ verdict_decision.ts }}.
+{% else %}
+The analyst **overrode** the agent's verdict: {{ verdict_decision.agent_verdict }} changed to **{{ verdict_decision.analyst_verdict }}** at {{ verdict_decision.ts }}.
+{% endif %}
+{% if verdict_decision.note %}
+
+Note: {{ verdict_decision.note | cell(600) }}
+{% endif %}
+{% else %}
+Pending. The analyst has not recorded a verdict decision yet.
+{% endif %}
+
+## Limitations
+
+{% for line in limitations %}
+- {{ line | cell(400) }}
+{% endfor %}

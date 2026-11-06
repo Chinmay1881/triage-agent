@@ -36,6 +36,10 @@ class MongoTelemetry:
         doc = await self._db.alerts.find_one({"alert_id": alert_id}, {"_id": 0})
         return Alert.model_validate(doc) if doc else None
 
+    async def alerts(self) -> list[Alert]:
+        docs = await self._db.alerts.find({}, {"_id": 0}).sort("alert_id", 1).to_list()
+        return [Alert.model_validate(d) for d in docs]
+
     async def events(self, event_ids: list[str]) -> list[dict[str, Any]]:
         docs = await self._db.events.find({"event_id": {"$in": event_ids}}, {"_id": 0}).to_list()
         order = {eid: i for i, eid in enumerate(event_ids)}

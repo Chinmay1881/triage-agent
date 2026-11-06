@@ -179,7 +179,11 @@ async def run_call(
         log.info("%s: %s called without a window; using the alert time +-2 h", agent, name)
     ref, ids = record_result(name, final_args, result, evidence)
     if name == "check_reputation" and isinstance(args.get("indicator"), str):
-        evidence.looked_up.append(args["indicator"].lower())
+        indicator = args["indicator"].lower()
+        evidence.looked_up.append(indicator)
+        data = result.get("untrusted_log_data")
+        if isinstance(data, dict) and isinstance(data.get("reputation"), str):
+            evidence.reputations[indicator] = data["reputation"]
     record = ToolCallRecord(
         ref=ref,
         agent=agent,

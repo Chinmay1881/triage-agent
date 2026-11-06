@@ -24,7 +24,7 @@ from app.agent.injection import screen
 from app.agent.prompts.review import REOPEN, REVIEW, REVIEW_VERDICT
 from app.agent.prompts.system import SYSTEM
 from app.agent.toolrun import auto_reputation, run_call
-from app.config import INVESTIGATOR, REVIEWER
+from app.config import INVESTIGATOR, REPORT_AND_REVIEW, REVIEWER
 from app.llm import LLMError
 from app.telemetry.decode import decode_encoded_command
 from app.tools import tool_specs
@@ -288,7 +288,7 @@ def make_reviewer(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
             }
         return update | {
             "stop_reason": state.stop_reason or "complete",
-            "handoffs": [*state.handoffs, handoff(REVIEWER, "report")],
+            "handoffs": [*state.handoffs, handoff(REVIEWER, REPORT_AND_REVIEW)],
         }
 
     return review

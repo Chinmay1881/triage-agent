@@ -5,10 +5,8 @@
 Prints each step as it happens, then the findings, the injection flags (event ID and method
 only, never the flagged text), tool calls, LLM calls, tokens and duration.
 
-Alerts listed in data/generated/cli_blocklist.json (the prompt-injection scenario, written by
-the generator) are refused: they are run only through the eval harness, so their log text is
-never printed during development. Only this module reads that file; the agent and the tools
-never do (tests/test_app_isolation.py).
+Blocklisted alerts (the prompt-injection scenario, see app/blocklist.py) are refused: they are
+run only through the eval harness, so their log text is never printed during development.
 """
 
 import argparse
@@ -19,42 +17,21 @@ import logging
 import re
 import sys
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from pymongo.errors import ServerSelectionTimeoutError
 
 from app.agent.chain import RunResult, run_case
 from app.agent.deps import Deps, MongoTelemetry
+from app.blocklist import refusal
 from app.config import get_settings
 from app.llm import LLMError, UsageLog, get_model
 from app.ml import ModelMissingError
 from app.telemetry.db import telemetry_client, telemetry_db
 from app.tools import call_tool
 
-BLOCKLIST = Path(__file__).resolve().parents[2] / "data" / "generated" / "cli_blocklist.json"
 ALERT_ID = re.compile(r"^alt_\d{4}$")
 ARGS_CHARS = 120
-
-
-def blocked_alerts(path: Path) -> set[str] | None:
-    """Alert IDs to refuse, or None if the blocklist hasn't been generated yet."""
-    if not path.exists():
-        return None
-    return set(json.loads(path.read_text(encoding="utf-8"))["alert_ids"])
-
-
-def refusal(alert_id: str, path: Path | None = None) -> str | None:
-    path = path or BLOCKLIST
-    blocked = blocked_alerts(path)
-    if blocked is None:
-        return f"{path} is missing; run `python tasks.py seed` first"
-    if alert_id in blocked:
-        return (
-            f"{alert_id} is reserved for the eval harness (evals/, Phase 5); the CLI never runs "
-            "or prints it during development"
-        )
-    return None
 
 
 def short(value: Any, limit: int = ARGS_CHARS) -> str:
@@ -93,6 +70,8 @@ def print_step(node: str, update: dict[str, Any]) -> None:
         print(f"[check_coverage] sent back: {nudges[-1]}" if nudges else "[check_coverage] ok")
     elif node == "summarize_findings":
         print(f"[summarize_findings] {len(update.get('findings', []))} finding(s) in total")
+    elif node == "assess" and update.get("verdict"):
+        print(f"[assess] {update['verdict']} (confidence {update.get('confidence')})")
     elif node == "reviewer" and update.get("review"):
         r = update["review"]
         print(
@@ -108,6 +87,12 @@ def print_summary(result: RunResult, usage: UsageLog) -> None:
         print(f"  {h.ts:%H:%M:%S} {h.from_agent} -> {h.to_agent} {h.note}".rstrip())
     print(f"\nTriage: {state.triage.priority} {state.triage.category}" if state.triage else "")
     print(f"Budget: {state.budget_reason}")
+    if state.verdict:
+        print(f"Verdict: {state.verdict} (confidence {state.confidence}), risk {state.risk_score}")
+        for note in state.verdict_notes:
+            print(f"  {note}")
+        for r in state.recommendations:
+            print(f"  {r.id} {r.action} {r.target} (needs analyst approval)")
     if state.intel_brief:
         print("\nIntel brief, process chain:")
         for row in state.intel_brief.process_chain:

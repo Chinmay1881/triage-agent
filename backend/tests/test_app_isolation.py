@@ -158,6 +158,21 @@ def test_agent_and_tools_never_read_the_cli_blocklist(path: Path) -> None:
     assert BLOCKLIST_NAME not in path.read_text(encoding="utf-8")
 
 
-def test_only_the_cli_mentions_the_blocklist() -> None:
+def test_only_the_blocklist_module_names_the_file() -> None:
     users = [p for p in APP.rglob("*.py") if BLOCKLIST_NAME in p.read_text(encoding="utf-8")]
-    assert users == [APP / "cli.py"]
+    assert users == [APP / "blocklist.py"]
+
+
+def test_only_the_cli_and_the_api_use_the_blocklist_module() -> None:
+    def imports_it(path: Path) -> bool:
+        names = []
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names += [f"{node.module}.{a.name}" for a in node.names]
+                names.append(node.module)
+            elif isinstance(node, ast.Import):
+                names += [a.name for a in node.names]
+        return "app.blocklist" in names
+
+    users = sorted(p.relative_to(APP).as_posix() for p in APP.rglob("*.py") if imports_it(p))
+    assert users == ["api/routes.py", "cli.py"]

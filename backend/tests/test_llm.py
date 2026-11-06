@@ -105,7 +105,19 @@ def test_default_efforts_think_harder_where_checks_are_chosen() -> None:
         "summarize_findings": "low",
         "review": "medium",
         "review_verdict": "medium",
+        "map_attack": "low",
+        "assess": "medium",
+        "recommend": "low",
+        "report_summary": "low",
     }
+
+
+def test_assess_is_on_the_main_model_and_the_other_closing_steps_are_not() -> None:
+    settings = get_settings().model_copy(update={"llm_model": "big-model"})
+
+    assert settings.model_for("assess") == "big-model"
+    for node in ("map_attack", "recommend", "report_summary"):
+        assert settings.model_for(node) == "openai/gpt-oss-20b"
 
 
 def test_each_agent_has_its_model_and_each_model_its_bucket() -> None:

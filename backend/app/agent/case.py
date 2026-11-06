@@ -1,9 +1,9 @@
 """The Case: the one model passed along the agent chain (spec: "The agent chain").
 
 Sentinel-Triage fills `triage`, CyberIntel-Agent `intel_brief`, Investigator-Agent `findings`,
-Reviewer-Agent `review`. Every agent appends to the handoff log, its own tool log, and the
-shared evidence ledger. The Phase 4 fields (mappings, verdict, risk, recommendations, report)
-are declared now so the shape matches the spec from the start.
+Reviewer-Agent `review`, and the Report & Human Review stage the mappings, verdict, risk,
+recommendations and report. Every agent appends to the handoff log, its own tool log, and the
+shared evidence ledger.
 
 The structured-output schemas are separate `*Draft` models: what the model may return is
 narrower than what the Case stores (code adds statuses, tool names and validation results).
@@ -19,6 +19,7 @@ from app.telemetry.models import Alert, UtcDatetime
 
 WITHHELD = "[withheld: matched injection pattern]"
 MAX_FINDINGS = 8
+MAX_RECOMMENDATIONS = 5
 MAX_CITED = 10
 TEXT_CHARS = 300
 
@@ -102,6 +103,52 @@ class ReviewDraft(_Strict):
     reopen: bool
     missing_checks: Annotated[list[ShortText], keep_first(3)]
     reason: ShortText
+
+
+class MappingDraft(_Strict):
+    technique_id: str
+    event_ids: Annotated[list[str], keep_first(MAX_CITED)]
+    rationale: ShortText
+
+
+class MappingsDraft(_Strict):
+    mappings: Annotated[list[MappingDraft], keep_first(10)]
+
+
+Verdict = Literal["malicious", "suspicious", "benign"]
+
+
+class AssessDraft(_Strict):
+    verdict: Verdict
+    confidence: Annotated[float, AfterValidator(lambda c: min(max(c, 0.0), 1.0))]
+    reasoning: ShortText
+    # IDs of confirmed findings that support the harmless hypothesis (needed for a benign verdict).
+    supporting_benign: list[str]
+
+
+Action = Literal[
+    "isolate_host",
+    "disable_account",
+    "reset_password",
+    "block_indicator",
+    "collect_forensics",
+    "escalate",
+    "close_as_benign",
+]
+
+
+class RecommendationDraft(_Strict):
+    action: Action
+    target: str
+    reason: ShortText
+
+
+class RecommendationsDraft(_Strict):
+    recommendations: Annotated[list[RecommendationDraft], keep_first(MAX_RECOMMENDATIONS)]
+
+
+class SummaryDraft(_Strict):
+    summary: str
 
 
 # --- what the Case stores ------------------------------------------------------------------
@@ -216,6 +263,8 @@ class Evidence(_Strict):
     # sha256 -> process or file names seen with it, so a claim can name the file.
     aliases: dict[str, list[str]] = {}
     looked_up: list[str] = []
+    # Indicator -> what the intel feed says, for the verdict guardrail.
+    reputations: dict[str, str] = {}
     # Successful calls by tool and arguments, to answer exact repeats without running them again.
     answers: dict[str, StoredAnswer] = {}
     free_repeats: dict[str, int] = {}
@@ -251,18 +300,8 @@ class AttackMapping(_Strict):
     rationale: str
 
 
-Action = Literal[
-    "isolate_host",
-    "disable_account",
-    "reset_password",
-    "block_indicator",
-    "collect_forensics",
-    "escalate",
-    "close_as_benign",
-]
-
-
 class Recommendation(_Strict):
+    id: str
     action: Action
     target: str
     reason: str
@@ -301,14 +340,27 @@ class Case(BaseModel):
     reopened: int = 0
     stop_reason: str | None = None
 
+    # Report & Human Review.
+    mapping_drafts: list[MappingDraft] = []
     attack_mappings: list[AttackMapping] = []
     mapping_errors: list[str] = []
     mapping_retries: int = 0
-    verdict: Literal["malicious", "suspicious", "benign"] | None = None
+    mapping_retry: bool = False
+    # Every error across attempts, including ones a retry fixed: what the validator caught.
+    mapping_rejections: list[str] = []
+    # What the verdict was before the code rules, and why it was changed.
+    verdict_proposed: Verdict | None = None
+    verdict: Verdict | None = None
     confidence: float | None = None
+    verdict_reasoning: str = ""
+    verdict_notes: list[str] = []
     risk_score: int | None = None
     risk_factors: dict[str, Any] = {}
     recommendations: list[Recommendation] = []
+    timeline: list[dict[str, Any]] = []
+    report_summary: str = ""
+    # Mappings, recommendations or sentences dropped by the code checks: shown under Limitations.
+    closure_notes: list[str] = []
     report_md: str | None = None
 
     def reportable_findings(self) -> list[Finding]:
