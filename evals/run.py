@@ -2,7 +2,7 @@
 as one line of evals/results/runs/<config>.jsonl.
 
     uv run --project backend python evals/run.py --config default --scenarios all --variants 1
-    uv run --project backend python evals/run.py --config default --scenarios all --variants 1 --mock
+    uv run --project backend python evals/run.py --config small --scenarios s01,s08 --mock
 
 --variants N runs variants 1 to N, --repeat N runs each N times, and --mock uses the scripted model
 and writes to <config>-mock.jsonl with no Groq call. EVAL_TIER=free|paid sets the limits.

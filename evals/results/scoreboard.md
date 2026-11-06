@@ -2,7 +2,7 @@
 
 **SCRIPTED MODEL.** These runs used a mock that follows a fixed rule, with no Groq call. They show that the harness works. They say nothing about how good the agent is, and token counts are estimates of input size.
 
-Generated 2026-11-06T08:17:54Z.
+Generated 2026-11-06T08:25:38Z.
 
 ## Config: default-mock
 
