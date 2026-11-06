@@ -347,14 +347,24 @@ Tokens per minute, not requests, are the bottleneck. Groq's sample free limits f
 
 Rough estimate (measure in week 3): one investigation is about 10–12 LLM calls and 20,000–30,000 tokens, so about 3–5 minutes per investigation and roughly 7–10 investigations per model per day on the free tier.
 
-Measured in Phase 3 (nodes 1–6 only, `gpt-oss-120b`, `reasoning_effort=low`):
+**Develop on `gpt-oss-20b` or mock; spend `gpt-oss-120b` only on acceptance and evals.**
 
-| Run | Tool calls | LLM calls | Tokens (in / out) | Duration |
-| --- | --- | --- | --- | --- |
-| s01 (alt_0001) | 5 / 12, one critic reopen | 11 | 36,170 (33,531 / 2,639) | 213 s |
-| s08 (alt_0006) | 8 / 12, one critic reopen | 15 | 52,753 (50,088 / 2,665) | 340 s |
+Measured in Phase 3 (the nodes up to `critic` only; Phase 4 nodes not included):
 
-Tokens are higher than the estimate, mostly input: each `investigate` call resends the system prompt, about 1,850 tokens of tool schemas, the case and the conversation, which comes to 3,000–4,800 tokens a call. Output stays small. Phase 4 will add about 5 calls. Expect about 45,000–65,000 tokens per full run, so roughly 3–4 investigations per model per day under the 200,000-token daily limit, not 7–10. Pacing is a token bucket (8,000 capacity, refilling at about 133 tokens a second); with it, 429s are rare and retried after `retry-after`.
+| Run | Model, reasoning effort | Tool calls | LLM calls | Tokens (in / out) | Duration |
+| --- | --- | --- | --- | --- | --- |
+| s01 (alt_0001) | `gpt-oss-120b`, low everywhere | 5 / 12, one critic reopen | 11 | 36,170 (33,531 / 2,639) | 213 s |
+| s08 (alt_0006) | `gpt-oss-120b`, low everywhere | 8 / 12, one critic reopen | 15 | 52,753 (50,088 / 2,665) | 340 s |
+| s01 (alt_0001) | `gpt-oss-20b`, per-node | 8 / 12, one critic reopen | 14 | 44,321 (40,950 / 3,371) | 274 s |
+| s08 (alt_0006) | `gpt-oss-20b`, per-node | 6 / 12, no reopen | 10 | 33,900 (31,291 / 2,609) | 171 s |
+
+"Per-node" is the current default: `medium` for `investigate` and `critic`, `low` for `plan` and `summarize_findings`. It has not yet been measured on `gpt-oss-120b`.
+
+Tokens are higher than the estimate, mostly input: each `investigate` call resends the system prompt, about 1,850 tokens of tool schemas, the case and the conversation, which comes to 2,800–4,800 tokens a call. A run so far costs about 34,000–53,000 tokens, which allows 3–5 runs per model per day under `gpt-oss-120b`'s limit of 200,000 tokens a day (confirmed from a 429 message). Phase 4 adds about 5 calls, so plan on 3–4 full runs a day, not 7–10. The limit for `gpt-oss-20b` has not been confirmed. At that rate the main-model deep run (36 runs) takes 9–12 days on the free tier, so the eval plan will need fewer runs or a paid tier.
+
+Prompt caching does not change this yet. Groq's docs say "Cached tokens do not count towards your rate limits" and list both gpt-oss models, but hits are rare in practice: 1 of about 40 requests on `gpt-oss-20b` (2,816 tokens), including 0 of 11 identical requests sent 20–25 seconds apart. The start of every `investigate` call (system prompt, tool specs, case) is byte-identical within a run, and a test keeps it so; cached tokens are logged per call and left out of the pacing bucket, so any hit is used. The older-result shrinking stays as it is: keeping more results in full would only pay off if hits were reliable.
+
+Pacing is a token bucket (8,000 capacity, refilling at about 133 tokens a second). Short 429s still happen and are retried after `retry-after`. A 429 asking for more than 2 minutes means a daily limit, and the call fails at once with Groq's reason.
 
 Build for it:
 

@@ -127,13 +127,14 @@ def print_summary(result: RunResult, usage: UsageLog, budget: int) -> None:
     for node, row in usage.by_node().items():
         print(
             f"  {node:<19} {row['effort'] or 'default':<7} {row['calls']:>2} call(s), "
-            f"in {row['input_tokens']}, out {row['output_tokens']}"
+            f"in {row['input_tokens']} (cached {row['cached_tokens']}), out {row['output_tokens']}"
         )
     totals = usage.totals()
     print(
         f"\nTool calls {state.tool_calls_used}/{budget}, LLM calls {totals['llm_calls']}, "
-        f"tokens {totals['total_tokens']} (in {totals['input_tokens']}, out "
-        f"{totals['output_tokens']}), {result.seconds:.0f}s, stop: {state.stop_reason}"
+        f"tokens {totals['total_tokens']} (in {totals['input_tokens']}, cached "
+        f"{totals['cached_tokens']}, out {totals['output_tokens']}), billed against limits "
+        f"{totals['billed_tokens']}, {result.seconds:.0f}s, stop: {state.stop_reason}"
         + (" (timed out)" if result.timed_out else "")
     )
 

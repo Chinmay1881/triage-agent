@@ -55,6 +55,13 @@ class CallRecord:
     seconds: float
     retries: int
     effort: str | None = None
+    # Input tokens served from Groq's prompt cache. Groq: "Cached tokens do not count towards
+    # your rate limits", so billed = input - cached + output is what the limits see.
+    cached_tokens: int = 0
+
+    @property
+    def billed_tokens(self) -> int:
+        return self.input_tokens - self.cached_tokens + self.output_tokens
 
 
 @dataclass
@@ -64,12 +71,13 @@ class UsageLog:
     def add(self, record: CallRecord) -> None:
         self.calls.append(record)
         log.info(
-            "llm call node=%s effort=%s in=%d out=%d total=%d %.1fs retries=%d",
+            "llm call node=%s effort=%s in=%d cached=%d out=%d billed=%d %.1fs retries=%d",
             record.node,
             record.effort,
             record.input_tokens,
+            record.cached_tokens,
             record.output_tokens,
-            record.input_tokens + record.output_tokens,
+            record.billed_tokens,
             record.seconds,
             record.retries,
         )
@@ -79,10 +87,18 @@ class UsageLog:
         out: dict[str, dict[str, Any]] = {}
         for c in self.calls:
             row = out.setdefault(
-                c.node, {"effort": c.effort, "calls": 0, "input_tokens": 0, "output_tokens": 0}
+                c.node,
+                {
+                    "effort": c.effort,
+                    "calls": 0,
+                    "input_tokens": 0,
+                    "cached_tokens": 0,
+                    "output_tokens": 0,
+                },
             )
             row["calls"] += 1
             row["input_tokens"] += c.input_tokens
+            row["cached_tokens"] += c.cached_tokens
             row["output_tokens"] += c.output_tokens
         return out
 
@@ -94,8 +110,10 @@ class UsageLog:
         return {
             "llm_calls": len(self.calls),
             "input_tokens": sum(c.input_tokens for c in self.calls),
+            "cached_tokens": sum(c.cached_tokens for c in self.calls),
             "output_tokens": sum(c.output_tokens for c in self.calls),
             "total_tokens": self.total_tokens,
+            "billed_tokens": sum(c.billed_tokens for c in self.calls),
         }
 
 
@@ -247,6 +265,7 @@ class GroqLLM:
                 continue
             raw = result["raw"] if isinstance(result, dict) else result
             usage = getattr(raw, "usage_metadata", None) or {}
+            details = usage.get("input_token_details") or {}
             record = CallRecord(
                 node,
                 usage.get("input_tokens", estimate),
@@ -254,8 +273,9 @@ class GroqLLM:
                 self._clock() - started,
                 retries,
                 effort,
+                details.get("cache_read") or 0,
             )
-            self.window.record(record.input_tokens + record.output_tokens)
+            self.window.record(record.billed_tokens)
             self.usage.add(record)
             return result
 

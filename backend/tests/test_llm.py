@@ -188,9 +188,28 @@ async def test_usage_totals_add_up() -> None:
     assert llm.usage.totals() == {
         "llm_calls": 2,
         "input_tokens": 150,
+        "cached_tokens": 0,
         "output_tokens": 25,
         "total_tokens": 175,
+        "billed_tokens": 175,
     }
+
+
+async def test_cached_tokens_are_logged_and_not_billed_for_pacing() -> None:
+    usage = {
+        "input_tokens": 4000,
+        "output_tokens": 100,
+        "total_tokens": 4100,
+        "input_token_details": {"cache_read": 3000},
+    }
+    llm = groq_llm(FakeRunnable([AIMessage("ok", usage_metadata=usage)]), FakeClock())
+
+    await llm.invoke_tools("investigate", [HumanMessage("x")], [])
+
+    (record,) = llm.usage.calls
+    assert record.cached_tokens == 3000 and record.billed_tokens == 1100
+    # Groq: cached tokens don't count towards rate limits, so pacing only spends 1,100.
+    assert llm.window.available() == pytest.approx(8000 - 1100)
 
 
 async def test_mock_repeats_last_answer_and_records_prompts() -> None:

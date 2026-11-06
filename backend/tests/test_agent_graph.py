@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.llm import InvalidToolCallError, LLMError, MockLLM
 from app.ml.injection import InjectionModel
 from app.telemetry.models import Alert
-from app.tools import TOOLS, call_tool
+from app.tools import TOOLS, call_tool, tool_specs
 from scripts.gen.scenario import encode_powershell
 
 TS = datetime(2026, 10, 6, 10, 0, tzinfo=UTC)
@@ -382,6 +382,30 @@ async def test_llm_error_in_investigate_still_concludes() -> None:
     state = (await run(d)).state
 
     assert state.stop_reason == "llm_error" and state.critic is not None
+
+
+async def test_investigate_prompt_prefix_is_byte_identical_across_calls() -> None:
+    # Groq's prompt cache needs an exact prefix match, so what comes first in every investigate
+    # call (system prompt, then the case) must not change during a run.
+    script = {
+        "investigate": [
+            AIMessage("", tool_calls=[TREE_CALL]),
+            AIMessage("", tool_calls=[HOST_CALL]),
+            DONE,
+        ]
+    }
+    d, llm = deps(script, {"get_process_tree": TREE_RESULT})
+
+    await run(d)
+
+    prompts = llm.prompts["investigate"]
+    assert len(prompts) >= 3
+    assert len({p[0].content for p in prompts}) == 1
+    assert len({p[1].content for p in prompts}) == 1
+
+
+def test_tool_specs_serialise_identically() -> None:
+    assert json.dumps(tool_specs()) == json.dumps(tool_specs())
 
 
 async def test_rejected_tool_call_is_explained_to_the_model_once() -> None:
