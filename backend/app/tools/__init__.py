@@ -6,7 +6,7 @@ entry point: it validates, runs, turns failures into {"error": ...} and enforces
 cap. `tool_specs()` describes the same tools to the model in compact OpenAI tool format.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -170,8 +170,10 @@ def compact_schema(schema: Any) -> Any:
     return out
 
 
-def tool_specs() -> list[dict[str, Any]]:
-    """All tools in OpenAI function-tool format, ready for `bind_tools`."""
+def tool_specs(names: Iterable[str] | None = None) -> list[dict[str, Any]]:
+    """Tools in OpenAI function-tool format, ready for `bind_tools`: all of them, or the named
+    ones in registry order, so the same names always serialise to the same bytes."""
+    wanted = set(TOOLS if names is None else names)
     return [
         {
             "type": "function",
@@ -182,4 +184,5 @@ def tool_specs() -> list[dict[str, Any]]:
             },
         }
         for t in TOOLS.values()
+        if t.name in wanted
     ]

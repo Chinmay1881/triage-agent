@@ -11,7 +11,10 @@ Groq's free tier allows about 8,000 tokens a minute, so `GroqLLM`:
   server sends it and backing off exponentially when it doesn't;
 - retries a structured output that fails to parse, or that Groq's strict schema check
   rejects, once with the error, then fails cleanly (spec: "Flaky output");
-- logs tokens and latency for every call and keeps a per-run tally for the CLI.
+- logs tokens and latency for every call and keeps a per-run tally per node, agent and model.
+
+Each agent has its own model (Settings.model_for) and Groq's limits are per model, so every
+model gets its own token bucket.
 """
 
 import asyncio
@@ -29,7 +32,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, ValidationError
 
-from app.config import Settings, get_settings
+from app.config import NODE_AGENT, Settings, get_settings
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +61,13 @@ class CallRecord:
     # Input tokens served from Groq's prompt cache. Groq: "Cached tokens do not count towards
     # your rate limits", so billed = input - cached + output is what the limits see.
     cached_tokens: int = 0
+    model: str | None = None
+    # Groq rejected the request (400): input_tokens is our estimate, and the output is unknown.
+    rejected: bool = False
+
+    @property
+    def agent(self) -> str:
+        return NODE_AGENT.get(self.node, self.node)
 
     @property
     def billed_tokens(self) -> int:
@@ -71,8 +81,10 @@ class UsageLog:
     def add(self, record: CallRecord) -> None:
         self.calls.append(record)
         log.info(
-            "llm call node=%s effort=%s in=%d cached=%d out=%d billed=%d %.1fs retries=%d",
+            "llm call node=%s model=%s effort=%s in=%d cached=%d out=%d billed=%d %.1fs "
+            "retries=%d%s",
             record.node,
+            record.model,
             record.effort,
             record.input_tokens,
             record.cached_tokens,
@@ -80,39 +92,52 @@ class UsageLog:
             record.billed_tokens,
             record.seconds,
             record.retries,
+            " REJECTED" if record.rejected else "",
         )
 
-    def by_node(self) -> dict[str, dict[str, Any]]:
-        """Calls and tokens per node with its reasoning effort, to compare token costs."""
-        out: dict[str, dict[str, Any]] = {}
+    def _grouped(self, key: Callable[[CallRecord], str | None]) -> dict[str, dict[str, int]]:
+        out: dict[str, dict[str, int]] = {}
         for c in self.calls:
             row = out.setdefault(
-                c.node,
+                str(key(c)),
                 {
-                    "effort": c.effort,
                     "calls": 0,
+                    "rejected_calls": 0,
                     "input_tokens": 0,
                     "cached_tokens": 0,
                     "output_tokens": 0,
+                    "billed_tokens": 0,
                 },
             )
             row["calls"] += 1
+            row["rejected_calls"] += int(c.rejected)
             row["input_tokens"] += c.input_tokens
             row["cached_tokens"] += c.cached_tokens
             row["output_tokens"] += c.output_tokens
+            row["billed_tokens"] += c.billed_tokens
         return out
 
-    @property
-    def total_tokens(self) -> int:
-        return sum(c.input_tokens + c.output_tokens for c in self.calls)
+    def by_node(self) -> dict[str, dict[str, Any]]:
+        """Calls and tokens per node with its model and reasoning effort."""
+        rows: dict[str, dict[str, Any]] = dict(self._grouped(lambda c: c.node))
+        for c in self.calls:
+            rows[c.node] |= {"effort": c.effort, "model": c.model}
+        return rows
+
+    def by_agent(self) -> dict[str, dict[str, int]]:
+        return self._grouped(lambda c: c.agent)
+
+    def by_model(self) -> dict[str, dict[str, int]]:
+        return self._grouped(lambda c: c.model)
 
     def totals(self) -> dict[str, int]:
         return {
             "llm_calls": len(self.calls),
+            "rejected_calls": sum(c.rejected for c in self.calls),
             "input_tokens": sum(c.input_tokens for c in self.calls),
             "cached_tokens": sum(c.cached_tokens for c in self.calls),
             "output_tokens": sum(c.output_tokens for c in self.calls),
-            "total_tokens": self.total_tokens,
+            "total_tokens": sum(c.input_tokens + c.output_tokens for c in self.calls),
             "billed_tokens": sum(c.billed_tokens for c in self.calls),
         }
 
@@ -201,12 +226,12 @@ def retry_after(exc: groq.RateLimitError) -> float | None:
     return None
 
 
-ChatFactory = Callable[[str | None], BaseChatModel]
+ChatFactory = Callable[[str, str | None], BaseChatModel]
 
 
 class GroqLLM:
-    """`chat_for(effort)` builds the chat model for one reasoning effort (None = provider
-    default); one model per effort is built lazily and reused. `efforts` maps node -> effort."""
+    """`chat_for(model, effort)` builds a chat model (effort None = provider default); one per
+    pair is built lazily and reused. `efforts` maps node -> effort."""
 
     def __init__(
         self,
@@ -217,19 +242,27 @@ class GroqLLM:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._chat_for = chat_for
-        self._chats: dict[str | None, BaseChatModel] = {}
+        self._chats: dict[tuple[str, str | None], BaseChatModel] = {}
+        self._buckets: dict[str, TokenBucket] = {}
         self._efforts = efforts or {}
         self._settings = settings
         self._sleep = sleep
         self._clock = clock
-        self.window = TokenBucket(settings.llm_tpm_limit, clock, sleep)
         self.usage = UsageLog()
 
+    def bucket_for(self, node: str) -> TokenBucket:
+        model = self._settings.model_for(node)
+        if model not in self._buckets:
+            self._buckets[model] = TokenBucket(
+                self._settings.llm_tpm_limit, self._clock, self._sleep
+            )
+        return self._buckets[model]
+
     def _chat(self, node: str) -> tuple[BaseChatModel, str | None]:
-        effort = self._efforts.get(node)
-        if effort not in self._chats:
-            self._chats[effort] = self._chat_for(effort)
-        return self._chats[effort], effort
+        key = (self._settings.model_for(node), self._efforts.get(node))
+        if key not in self._chats:
+            self._chats[key] = self._chat_for(*key)
+        return self._chats[key], key[1]
 
     async def _call(
         self,
@@ -240,14 +273,29 @@ class GroqLLM:
         effort: str | None,
     ) -> Any:
         retries = 0
+        bucket = self.bucket_for(node)
+        model = self._settings.model_for(node)
         while True:
-            await self.window.wait_for(estimate + EXPECTED_OUTPUT_TOKENS)
+            await bucket.wait_for(estimate + EXPECTED_OUTPUT_TOKENS)
             started = self._clock()
             try:
                 result = await runnable.ainvoke(list(messages))
             except groq.BadRequestError:
-                # A rejected request still spent tokens on Groq's side; count them for pacing.
-                self.window.record(estimate)
+                # A rejected request still spent tokens on Groq's side: pace for them and count
+                # them, so a run's totals don't hide its failed attempts.
+                bucket.record(estimate)
+                self.usage.add(
+                    CallRecord(
+                        node,
+                        estimate,
+                        0,
+                        self._clock() - started,
+                        retries,
+                        effort,
+                        model=model,
+                        rejected=True,
+                    )
+                )
                 raise
             except groq.RateLimitError as exc:
                 if retries >= self._settings.llm_max_retries:
@@ -274,8 +322,9 @@ class GroqLLM:
                 retries,
                 effort,
                 details.get("cache_read") or 0,
+                model,
             )
-            self.window.record(record.billed_tokens)
+            bucket.record(record.billed_tokens)
             self.usage.add(record)
             return result
 
@@ -318,12 +367,14 @@ class GroqLLM:
                 if code != "json_validate_failed":
                     raise LLMError(f"{node}: request rejected ({code}): {message}") from None
                 error = message
+                # Groq's message names the schema path that failed and never the output.
+                log.warning("%s: Groq rejected the output: %s", node, message)
             else:
                 parsed = result.get("parsed")
                 error = result.get("parsing_error")
                 if parsed is not None and error is None:
                     return parsed
-            log.warning("%s: output did not match %s; retrying once", node, schema.__name__)
+                log.warning("%s: output did not parse as %s", node, schema.__name__)
             attempt = [
                 *messages,
                 HumanMessage(f"Your last answer did not match the schema: {error}. Try again."),
@@ -331,16 +382,24 @@ class GroqLLM:
         raise LLMError(f"{node}: output did not match {schema.__name__} twice")
 
 
-Scripted = AIMessage | BaseModel | dict[str, Any] | Exception
+Scripted = (
+    AIMessage
+    | BaseModel
+    | dict[str, Any]
+    | Exception
+    | Callable[[Sequence[BaseMessage]], "AIMessage | BaseModel | dict[str, Any]"]
+)
 
 
 class MockLLM:
     """Replays scripted answers per node, in order; the last one repeats once the script
-    runs out, so "always call a tool" is a one-item script. Records every prompt it gets."""
+    runs out, so "always call a tool" is a one-item script. An answer can be a function of
+    the prompt, for citing a ref the run assigned. Records every prompt and tool list it gets."""
 
     def __init__(self, script: dict[str, list[Scripted]]) -> None:
         self._script = {node: list(answers) for node, answers in script.items()}
         self.prompts: dict[str, list[list[BaseMessage]]] = defaultdict(list)
+        self.tools: dict[str, list[str]] = {}
         self.usage = UsageLog()
 
     def _next(self, node: str, messages: Sequence[BaseMessage]) -> Scripted:
@@ -351,12 +410,15 @@ class MockLLM:
         answer = answers.pop(0) if len(answers) > 1 else answers[0]
         if isinstance(answer, Exception):
             raise answer
-        self.usage.add(CallRecord(node, estimate_tokens(messages, None), 10, 0.0, 0))
+        if callable(answer):
+            answer = answer(messages)
+        self.usage.add(CallRecord(node, estimate_tokens(messages, None), 10, 0.0, 0, model="mock"))
         return answer
 
     async def invoke_tools(
         self, node: str, messages: Sequence[BaseMessage], tools: list[dict[str, Any]]
     ) -> AIMessage:
+        self.tools[node] = [t["function"]["name"] for t in tools]
         answer = self._next(node, messages)
         if not isinstance(answer, AIMessage):
             raise TypeError(f"{node}: scripted answer must be an AIMessage")
@@ -396,10 +458,8 @@ def get_model(settings: Settings | None = None) -> GroqLLM:
         # reasoning_effort is a Groq/gpt-oss parameter; other providers get their default.
         efforts = dict(settings.llm_reasoning_effort)
 
-    def chat_for(effort: str | None) -> BaseChatModel:
+    def chat_for(model: str, effort: str | None) -> BaseChatModel:
         extra = {"reasoning_effort": effort} if effort else {}
-        return init_chat_model(
-            settings.llm_model, model_provider=settings.llm_provider, **kwargs, **extra
-        )
+        return init_chat_model(model, model_provider=settings.llm_provider, **kwargs, **extra)
 
     return GroqLLM(chat_for, settings, efforts)

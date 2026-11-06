@@ -24,9 +24,8 @@ from typing import Any
 
 from pymongo.errors import ServerSelectionTimeoutError
 
-from app.agent.graph import MongoTelemetry, RunResult, run_investigation
-from app.agent.nodes import Deps
-from app.agent.state import ToolCallRecord
+from app.agent.chain import RunResult, run_case
+from app.agent.deps import Deps, MongoTelemetry
 from app.config import get_settings
 from app.llm import LLMError, UsageLog, get_model
 from app.ml import ModelMissingError
@@ -63,11 +62,16 @@ def short(value: Any, limit: int = ARGS_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def print_step(node: str, update: dict[str, Any], seen_records: list[int]) -> None:
-    if node == "ingest":
-        triggers = len(update.get("trigger_events", []))
-        flags = len(update.get("injection_flags", []))
-        print(f"[ingest] {triggers} trigger event(s), {flags} injection flag(s)")
+def print_step(node: str, update: dict[str, Any]) -> None:
+    for h in update.get("handoffs", [])[-1:]:
+        print(f"--> {h.from_agent} hands off to {h.to_agent} {h.note}".rstrip())
+    if node == "sentinel_triage" and update.get("triage"):
+        t = update["triage"]
+        print(f"[triage] {t.priority} {t.category}: {t.reason}")
+        print(f"[triage] budget: {update.get('budget_reason')}")
+    elif node == "cyberintel" and update.get("intel_brief"):
+        brief = update["intel_brief"]
+        print(f"[intel] {len(brief.reputation)} reputation lookups: {brief.assessment}")
     elif node == "plan":
         print("[plan]")
         for h in update.get("hypotheses", []):
@@ -83,59 +87,80 @@ def print_step(node: str, update: dict[str, Any], seen_records: list[int]) -> No
         if update.get("stop_reason") in ("budget", "llm_error"):
             print(f"[investigate] stopped: {update['stop_reason']}")
     elif node == "run_tools":
-        records: list[ToolCallRecord] = update.get("tool_log", [])
-        for record in records[seen_records[0] :]:
-            outcome = f"{record.event_ids} event id(s)" if record.ok else f"error: {record.error}"
-            print(f"[run_tools] {record.name}: {outcome}")
-        seen_records[0] = len(records)
         print(f"[run_tools] {update.get('tool_calls_used')} tool call(s) used")
     elif node == "check_coverage":
         nudges = update.get("coverage_nudges")
         print(f"[check_coverage] sent back: {nudges[-1]}" if nudges else "[check_coverage] ok")
     elif node == "summarize_findings":
-        if "findings" in update:
-            print(f"[summarize_findings] {len(update['findings'])} finding(s) in total")
-        else:
-            print("[summarize_findings] no new findings")
-    elif node == "critic":
-        review = update.get("critic")
-        if review is not None:
-            action = "reopen" if update.get("reopened") else "conclude"
-            print(f"[critic] {action}: {review.reason}")
+        print(f"[summarize_findings] {len(update.get('findings', []))} finding(s) in total")
+    elif node == "reviewer" and update.get("review"):
+        r = update["review"]
+        print(
+            f"[review] confirmed {len(r.confirmed)}, disputed {len(r.disputed)}, "
+            f"unreviewed {len(r.unreviewed)}: {r.reason}"
+        )
 
 
-def print_summary(result: RunResult, usage: UsageLog, budget: int) -> None:
+def print_summary(result: RunResult, usage: UsageLog) -> None:
     state = result.state
+    print("\nHandoffs:")
+    for h in state.handoffs:
+        print(f"  {h.ts:%H:%M:%S} {h.from_agent} -> {h.to_agent} {h.note}".rstrip())
+    print(f"\nTriage: {state.triage.priority} {state.triage.category}" if state.triage else "")
+    print(f"Budget: {state.budget_reason}")
+    if state.intel_brief:
+        print("\nIntel brief, process chain:")
+        for row in state.intel_brief.process_chain:
+            print(
+                f"  {row['role']:<8} {row['name']} signer={row.get('signer')} "
+                f"reputation={row.get('reputation')} [{row.get('event_id')}]"
+            )
     print("\nTool calls in order:")
-    for i, record in enumerate(state.tool_log, start=1):
-        outcome = "ok" if record.ok else "error"
-        print(f"  {i:>2}. {record.name}({short(record.args)}) {outcome}")
+    for agent, records in state.tool_logs.items():
+        print(f"  {agent}:")
+        for record in records:
+            tag = "" if record.source == "llm" else f" [{record.source}]"
+            tag += " [default window]" if record.defaulted_window else ""
+            outcome = "ok" if record.ok else f"error: {record.error}"
+            print(f"    {record.ref} {short(record.args)}{tag} {outcome}")
     if state.coverage_nudges:
         print(f"Coverage rules triggered: {', '.join(state.coverage_nudges)}")
     print("\nFindings:")
     for f in state.findings:
-        why = f" (by {', '.join(f.withheld_by)})" if f.withheld else ""
-        print(f"  - {f.shown_claim()}{why} [{', '.join(f.event_ids)}]")
-    if state.findings_dropped:
-        print(f"  ({state.findings_dropped} finding(s) dropped for citing unseen event IDs)")
+        why = f" (withheld by {', '.join(f.withheld_by)})" if f.withheld else ""
+        dispute = f" DISPUTED: {f.dispute_reason}" if f.status == "disputed" else ""
+        print(f"  {f.id} [{f.status}] {f.shown_claim()}{why} [{', '.join(f.citations)}]{dispute}")
+    print(f"  ({state.findings_dropped} dropped, {state.citations_removed} citations removed)")
     print("Injection flags:")
-    for flag in state.injection_flags:
+    for flag in state.evidence.injection_flags:
         print(f"  - {flag.event_id or '(no event)'} via {flag.method}")
-    if not state.injection_flags:
+    if not state.evidence.injection_flags:
         print("  none")
-    print("\nLLM calls per node (reasoning effort):")
+    print("\nTokens per agent:")
+    for agent, row in usage.by_agent().items():
+        print(f"  {agent:<19} {_usage_row(row)}")
+    print("Tokens per node (reasoning effort):")
     for node, row in usage.by_node().items():
-        print(
-            f"  {node:<19} {row['effort'] or 'default':<7} {row['calls']:>2} call(s), "
-            f"in {row['input_tokens']} (cached {row['cached_tokens']}), out {row['output_tokens']}"
-        )
+        print(f"  {node:<19} {row['effort'] or 'default':<7} {_usage_row(row)}")
+    print("Tokens per model:")
+    for model, row in usage.by_model().items():
+        print(f"  {model:<22} {_usage_row(row)}")
     totals = usage.totals()
     print(
-        f"\nTool calls {state.tool_calls_used}/{budget}, LLM calls {totals['llm_calls']}, "
-        f"tokens {totals['total_tokens']} (in {totals['input_tokens']}, cached "
-        f"{totals['cached_tokens']}, out {totals['output_tokens']}), billed against limits "
-        f"{totals['billed_tokens']}, {result.seconds:.0f}s, stop: {state.stop_reason}"
+        f"\nInvestigator tool calls {state.tool_calls_used}/{state.investigator_budget}, reviewer "
+        f"{state.review_calls_used}, LLM calls {totals['llm_calls']}, tokens "
+        f"{totals['total_tokens']}, billed against limits {totals['billed_tokens']}, "
+        f"{result.seconds:.0f}s, stop: {state.stop_reason}"
         + (" (timed out)" if result.timed_out else "")
+    )
+
+
+def _usage_row(row: dict[str, Any]) -> str:
+    rejected = f" ({row['rejected_calls']} rejected)" if row["rejected_calls"] else ""
+    return (
+        f"{row['calls']:>2} call(s){rejected}, in {row['input_tokens']} "
+        f"(cached {row['cached_tokens']}), out {row['output_tokens']}, "
+        f"billed {row['billed_tokens']}"
     )
 
 
@@ -151,14 +176,11 @@ async def investigate(alert_id: str) -> int:
             print(f"error: no alert {alert_id}", file=sys.stderr)
             return 1
         deps = Deps(llm, telemetry, partial(call_tool, db=db), settings)
-        seen_records = [0]
         print(f"Investigating {alert.alert_id}: {alert.rule} on {alert.host} ({alert.severity})")
-        result = await run_investigation(
-            deps, alert, lambda node, update: print_step(node, update, seen_records)
-        )
+        result = await run_case(deps, alert, print_step)
     finally:
         await client.close()
-    print_summary(result, llm.usage, settings.tool_budget)
+    print_summary(result, llm.usage)
     return 2 if result.timed_out else 0
 
 

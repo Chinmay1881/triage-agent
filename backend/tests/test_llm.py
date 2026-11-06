@@ -69,7 +69,7 @@ def groq_llm(
 ) -> GroqLLM:
     s = get_settings().model_copy(update=settings)
 
-    def chat_for(effort: str | None) -> FakeChat:
+    def chat_for(model: str, effort: str | None) -> FakeChat:
         if built is not None:
             built.append(effort)
         return FakeChat(runnable)
@@ -97,11 +97,39 @@ def test_default_efforts_think_harder_where_checks_are_chosen() -> None:
     efforts = get_settings().llm_reasoning_effort
 
     assert efforts == {
+        "triage": "low",
+        "intel": "low",
+        "intel_brief": "low",
         "plan": "low",
         "investigate": "medium",
         "summarize_findings": "low",
-        "critic": "medium",
+        "review": "medium",
+        "review_verdict": "medium",
     }
+
+
+def test_each_agent_has_its_model_and_each_model_its_bucket() -> None:
+    llm = groq_llm(FakeRunnable([reply()]), FakeClock(), llm_model="big-model")
+
+    assert llm._settings.model_for("triage") == "openai/gpt-oss-20b"
+    assert llm._settings.model_for("intel_brief") == "openai/gpt-oss-20b"
+    assert llm._settings.model_for("investigate") == "big-model"
+    assert llm._settings.model_for("review_verdict") == "big-model"
+    assert llm.bucket_for("plan") is llm.bucket_for("review")
+    assert llm.bucket_for("plan") is not llm.bucket_for("triage")
+
+
+async def test_tokens_are_reported_per_agent_and_model() -> None:
+    llm = groq_llm(FakeRunnable([reply(100, 20)]), FakeClock(), llm_model="big-model")
+
+    await llm.invoke_tools("triage", [HumanMessage("a")], [])
+    await llm.invoke_tools("investigate", [HumanMessage("b")], [])
+    await llm.invoke_tools("review", [HumanMessage("c")], [])
+
+    by_agent, by_model = llm.usage.by_agent(), llm.usage.by_model()
+    assert set(by_agent) == {"Sentinel-Triage", "Investigator-Agent", "Reviewer-Agent"}
+    assert by_model["big-model"]["calls"] == 2 and by_model["big-model"]["billed_tokens"] == 240
+    assert by_model["openai/gpt-oss-20b"]["calls"] == 1
 
 
 async def test_bucket_waits_only_for_the_missing_tokens() -> None:
@@ -187,6 +215,7 @@ async def test_usage_totals_add_up() -> None:
 
     assert llm.usage.totals() == {
         "llm_calls": 2,
+        "rejected_calls": 0,
         "input_tokens": 150,
         "cached_tokens": 0,
         "output_tokens": 25,
@@ -209,7 +238,7 @@ async def test_cached_tokens_are_logged_and_not_billed_for_pacing() -> None:
     (record,) = llm.usage.calls
     assert record.cached_tokens == 3000 and record.billed_tokens == 1100
     # Groq: cached tokens don't count towards rate limits, so pacing only spends 1,100.
-    assert llm.window.available() == pytest.approx(8000 - 1100)
+    assert llm.bucket_for("investigate").available() == pytest.approx(8000 - 1100)
 
 
 async def test_mock_repeats_last_answer_and_records_prompts() -> None:
@@ -250,7 +279,9 @@ async def test_rejected_tool_call_raises_with_the_api_reason_only() -> None:
 
     assert str(raised.value) == "schema mismatch" and "SECRET" not in str(raised.value)
     # The rejected request's ~100 estimated tokens still count for pacing.
-    assert llm.window.available() == pytest.approx(8000 - 100)
+    assert llm.bucket_for("investigate").available() == pytest.approx(8000 - 100)
+    totals = llm.usage.totals()
+    assert totals["rejected_calls"] == 1 and totals["billed_tokens"] == 100
 
 
 async def test_other_bad_requests_are_plain_llm_errors() -> None:

@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.agent.state import InjectionFlag
+from app.agent.case import WITHHELD, InjectionFlag
 from app.ml import injection as classifier_model
 
 AI = (
@@ -135,8 +135,23 @@ def _strings(value: Any, path: str, event_id: str | None) -> Iterator[tuple[str,
         yield path, value, event_id
 
 
+def screen(texts: list[str]) -> list[str]:
+    """LLM-written texts as later prompts may show them: WITHHELD if a pattern matches. Regex
+    only: the classifier's false positives on the model's own English cost real findings."""
+    return [WITHHELD if regex_hits(text) else text for text in texts]
+
+
+def scan_tool_result(result: dict[str, Any]) -> list[InjectionFlag]:
+    """Flags for a tool result's log content only. attack_catalog is MITRE's text from the
+    pinned bundle and errors are ours; flags there would be noise that later feeds a verdict
+    guardrail."""
+    if "untrusted_log_data" not in result:
+        return []
+    return scan(result["untrusted_log_data"], "untrusted_log_data")
+
+
 def scan(value: Any, path: str = "", event_id: str | None = None) -> list[InjectionFlag]:
-    """Injection flags for every text field in `value` (a tool result or event row)."""
+    """Injection flags for every text field in `value`, a block of log content."""
     found = list(_strings(value, path, event_id))
     flags: dict[tuple[str | None, str, str], InjectionFlag] = {}
     for (field, _, owner), hits in zip(found, detect_many([t for _, t, _ in found]), strict=True):
