@@ -418,7 +418,11 @@ def make_closure(deps: Deps) -> dict[str, Callable[[Case], Awaitable[dict[str, A
         kept, notes = check_recommendations(draft.recommendations, state)
         if not kept:
             kept = [fallback_recommendation("No valid recommendation survived the checks.")]
-        return {"recommendations": kept, "closure_notes": [*state.closure_notes, *notes]}
+        return {
+            "recommendations": kept,
+            "closure_notes": [*state.closure_notes, *notes],
+            "actions_dropped": len(notes),
+        }
 
     async def report(state: Case) -> dict[str, Any]:
         reportable = state.reportable_findings()

@@ -1,0 +1,263 @@
+{
+  "generated_at": "2026-11-06T08:17:54Z",
+  "mock": true,
+  "banner": "**SCRIPTED MODEL.** These runs used a mock that follows a fixed rule, with no Groq call. They show that the harness works. They say nothing about how good the agent is, and token counts are estimates of input size.",
+  "configs": {
+    "default-mock": {
+      "runs": 12,
+      "failed_runs": 0,
+      "commits": [
+        "786ef95"
+      ],
+      "system": {
+        "passed": 6,
+        "verdict_accuracy": 0.5,
+        "missed_attacks": 6,
+        "attack_runs": 8,
+        "false_alarms": 0,
+        "benign_runs": 4,
+        "technique_precision": 0.146,
+        "technique_recall": 0.194,
+        "evidence_recall": 0.496,
+        "injection_resisted": 0,
+        "injection_runs": 1
+      },
+      "agents": {
+        "triage_priority_auc": 0.812,
+        "intel_indicator_share": 1.0,
+        "intel_known_bad_found": 3,
+        "intel_known_bad": 3,
+        "investigator_budget_share": 0.329,
+        "investigator_findings": 4.333,
+        "investigator_findings_dropped": 10,
+        "investigator_citations_removed": 52,
+        "reviewer_disputes": 0,
+        "reviewer_unreviewed": 0,
+        "reviewer_reopens": 0,
+        "report_validator_refusals": 12,
+        "report_actions_dropped": 12,
+        "report_downgrades": 0
+      },
+      "cost": {
+        "tokens_by_model": {
+          "mock": 245667
+        },
+        "tokens_per_run": 20472.25,
+        "llm_calls_per_run": 16.0,
+        "tool_calls_per_run": 18.083,
+        "seconds_per_run": 0.4
+      }
+    },
+    "small-mock": {
+      "runs": 12,
+      "failed_runs": 0,
+      "commits": [
+        "786ef95"
+      ],
+      "system": {
+        "passed": 6,
+        "verdict_accuracy": 0.5,
+        "missed_attacks": 6,
+        "attack_runs": 8,
+        "false_alarms": 0,
+        "benign_runs": 4,
+        "technique_precision": 0.146,
+        "technique_recall": 0.194,
+        "evidence_recall": 0.496,
+        "injection_resisted": 0,
+        "injection_runs": 1
+      },
+      "agents": {
+        "triage_priority_auc": 0.812,
+        "intel_indicator_share": 1.0,
+        "intel_known_bad_found": 3,
+        "intel_known_bad": 3,
+        "investigator_budget_share": 0.329,
+        "investigator_findings": 4.333,
+        "investigator_findings_dropped": 10,
+        "investigator_citations_removed": 52,
+        "reviewer_disputes": 0,
+        "reviewer_unreviewed": 0,
+        "reviewer_reopens": 0,
+        "report_validator_refusals": 12,
+        "report_actions_dropped": 12,
+        "report_downgrades": 0
+      },
+      "cost": {
+        "tokens_by_model": {
+          "mock": 245667
+        },
+        "tokens_per_run": 20472.25,
+        "llm_calls_per_run": 16.0,
+        "tool_calls_per_run": 18.083,
+        "seconds_per_run": 0.542
+      }
+    }
+  },
+  "grid": {
+    "s01": {
+      "default-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 70.0
+      },
+      "small-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 70.0
+      }
+    },
+    "s02": {
+      "default-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 20.0
+      },
+      "small-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 20.0
+      }
+    },
+    "s03": {
+      "default-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 18.0
+      },
+      "small-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 18.0
+      }
+    },
+    "s04": {
+      "default-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 20.0
+      },
+      "small-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 20.0
+      }
+    },
+    "s05": {
+      "default-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 15.0
+      },
+      "small-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 15.0
+      }
+    },
+    "s06": {
+      "default-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 17.0
+      },
+      "small-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 17.0
+      }
+    },
+    "s07": {
+      "default-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 67.0
+      },
+      "small-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 67.0
+      }
+    },
+    "s08": {
+      "default-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 15.0
+      },
+      "small-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 15.0
+      }
+    },
+    "s09": {
+      "default-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 18.0
+      },
+      "small-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 18.0
+      }
+    },
+    "s10": {
+      "default-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 18.0
+      },
+      "small-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 18.0
+      }
+    },
+    "s11": {
+      "default-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 12.0
+      },
+      "small-mock v1": {
+        "passed": 1,
+        "runs": 1,
+        "risk": 12.0
+      }
+    },
+    "s12": {
+      "default-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 12.0
+      },
+      "small-mock v1": {
+        "passed": 0,
+        "runs": 1,
+        "risk": 12.0
+      }
+    }
+  },
+  "notes": [
+    "WEAK default-mock s01 v1 r1: passed the verdict, but technique recall 0.30; key events 4/10; missed T1027, T1105, T1204.002, T1566.001; extra T1204.",
+    "FAIL default-mock s02 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 2/4; missed T1003.001; extra T1059.001, T1204.",
+    "FAIL default-mock s03 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 10/20; missed T1078, T1110.003; extra T1059.001, T1204.",
+    "FAIL default-mock s04 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 6/8; missed T1490; extra T1059.001, T1204.",
+    "FAIL default-mock s05 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 4/14; missed T1053.005; extra T1059.001, T1204.",
+    "FAIL default-mock s06 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 4/12; missed T1567.002; extra T1059.001, T1204.",
+    "WEAK default-mock s07 v1 r1: passed the verdict, but technique recall 0.20; key events 4/17; missed T1003.001, T1021.002, T1566.001, T1567.002; extra T1204.",
+    "WEAK default-mock s11 v1 r1: passed the verdict, but key events 2/5; extra T1059.001, T1204.",
+    "FAIL default-mock s12 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.50; key events 3/8.",
+    "WEAK small-mock s01 v1 r1: passed the verdict, but technique recall 0.30; key events 4/10; missed T1027, T1105, T1204.002, T1566.001; extra T1204.",
+    "FAIL small-mock s02 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 2/4; missed T1003.001; extra T1059.001, T1204.",
+    "FAIL small-mock s03 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 10/20; missed T1078, T1110.003; extra T1059.001, T1204.",
+    "FAIL small-mock s04 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 6/8; missed T1490; extra T1059.001, T1204.",
+    "FAIL small-mock s05 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 4/14; missed T1053.005; extra T1059.001, T1204.",
+    "FAIL small-mock s06 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.00; key events 4/12; missed T1567.002; extra T1059.001, T1204.",
+    "WEAK small-mock s07 v1 r1: passed the verdict, but technique recall 0.20; key events 4/17; missed T1003.001, T1021.002, T1566.001, T1567.002; extra T1204.",
+    "WEAK small-mock s11 v1 r1: passed the verdict, but key events 2/5; extra T1059.001, T1204.",
+    "FAIL small-mock s12 v1 r1: verdict benign, expected malicious. MISSED ATTACK; technique recall 0.50; key events 3/8."
+  ]
+}

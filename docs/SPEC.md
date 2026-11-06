@@ -375,9 +375,10 @@ The eval harness runs the agent on every scenario, compares its output with the 
 
 How to run it:
 
-- Model comparison: all 12 scenarios, variant 1, once per model (3 models).
-- Main model deep run: all 12 scenarios × 3 variants.
-- Each run is saved as `evals/results/<date>_<model>.json`; `/evals` and the README read the latest.
+- `evals/run.py --config default|small --scenarios all --variants N [--repeat N] [--mock]`. `default` runs the investigator, reviewer and assess on `gpt-oss-120b` and the rest on `gpt-oss-20b`; `small` runs everything on `gpt-oss-20b`. Each run goes through the API code path and adds one metrics-only line to `evals/results/runs/<config>.jsonl`.
+- The plan: 12 scenarios x variant 1 on both configs, plus variants 2 and 3 on `default`: 48 runs, since resuming reuses `default` variant 1.
+- Rerun the same command to resume. A line is written only after scoring. `EVAL_TIER=free|paid` sets the per-minute pacing, the daily budget and whether the budget stops a batch. Groq's headers don't report tokens left today, so `runs/spend.jsonl` counts them, including discarded runs; a daily-limit 429 corrects the count, and the run it hit is thrown away instead of being saved with the chain's fallbacks in it. Mock runs go to `<config>-mock.jsonl`, spend nothing, and appear only when no real runs exist, under a banner.
+- `evals/report.py` writes `scoreboard.md` and `scoreboard.json`; `GET /evals/latest` serves the latter under `scoreboard`. A run passes if it finished, its verdict matches, and on s12 the injection was flagged. s12's record holds metrics only, with no technique or event IDs.
 - Plain unit tests are separate and run on every change: tools, the ATT&CK validator, the risk formula, and a test proving no tool can reach ground truth.
 
 ## Living within Groq's free tier

@@ -20,6 +20,7 @@ model gets its own token bucket.
 import asyncio
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
@@ -39,6 +40,8 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 # Expected completion size used for pacing; max_tokens would be far too pessimistic.
 EXPECTED_OUTPUT_TOKENS = 600
+# Groq's wording: "... on tokens per day (TPD): Limit 200000, Used 199657, Requested 1547."
+TOKENS_USED_TODAY = re.compile(r"tokens per day.*?Used (\d+)", re.IGNORECASE | re.DOTALL)
 
 
 class LLMError(RuntimeError):
@@ -48,6 +51,18 @@ class LLMError(RuntimeError):
 class InvalidToolCallError(LLMError):
     """The API rejected the model's tool call (bad JSON or arguments that fail the schema).
     The message is Groq's explanation, never its `failed_generation`."""
+
+
+class DailyLimitError(LLMError):
+    """A 429 asking for a longer wait than a run can sit through. Nodes treat it like any failed
+    call; the eval harness also reads Groq's figures, since no header reports tokens left today."""
+
+    def __init__(self, message: str, model: str, retry_after: float, groq_message: str) -> None:
+        super().__init__(message)
+        self.model = model
+        self.retry_after = retry_after
+        match = TOKENS_USED_TODAY.search(groq_message)
+        self.used = int(match.group(1)) if match else None
 
 
 @dataclass
@@ -315,7 +330,9 @@ class GroqLLM:
                     # wait inside one run can fix. Fail now with Groq's reason instead of
                     # sleeping until the run times out.
                     _, message = error_text(exc)
-                    raise LLMError(f"{node}: Groq asks to wait {delay:.0f}s: {message}") from None
+                    raise DailyLimitError(
+                        f"{node}: Groq asks to wait {delay:.0f}s: {message}", model, delay, message
+                    ) from None
                 log.warning("429 on %s; retrying in %.1fs", node, delay)
                 retries += 1
                 await self._sleep(delay)

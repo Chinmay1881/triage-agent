@@ -365,6 +365,7 @@ class Case(BaseModel):
     report_summary: str = ""
     # Mappings, recommendations or sentences dropped by the code checks: shown under Limitations.
     closure_notes: list[str] = []
+    actions_dropped: int = 0
     report_md: str | None = None
 
     def reportable_findings(self) -> list[Finding]:
