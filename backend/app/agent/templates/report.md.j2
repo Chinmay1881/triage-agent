@@ -1,4 +1,4 @@
-# Triage report: {{ alert.alert_id }}
+# Triage report: {{ alert.alert_id }}, {{ alert.rule | cell }}
 
 ## Summary
 
@@ -24,6 +24,16 @@ Investigator budget: {{ budget_reason | cell }}. Calls used: {{ tool_calls_used 
 {% else %}
 Triage did not complete.
 {% endif %}
+
+## Agent trail
+
+| Stage | Model | LLM calls | Tool calls | Duration | Output |
+| --- | --- | --- | --- | --- | --- |
+{% for row in trail %}
+| {{ row.stage }} | {{ row.models | cell }} | {{ row.llm_calls }} | {{ row.tool_calls }} | {{ row.duration }} | {{ row.output | cell }} |
+{% endfor %}
+
+Tool calls are the tools that ran, code lookups included; a repeat answered from the ledger isn't one. Duration is the time between handoffs, so it includes waiting for rate limits, and a reopen adds to it.
 
 ## Intel brief
 
@@ -52,14 +62,18 @@ Indicators looked up:
 No intel brief.
 {% endif %}
 
+{{ injection_line }}
+
 ## Key event timeline
 
 {% if timeline %}
-| Time (UTC) | Event | Type | Process | Parent | Target |
-| --- | --- | --- | --- | --- | --- |
+| Time (UTC) | Event | Type | Anomaly | Process | Parent | Target |
+| --- | --- | --- | --- | --- | --- | --- |
 {% for row in timeline %}
-| {{ row.ts }} | {{ row.event_id }} | {{ row.event_type }} | {{ (row.process or "") | cell }} | {{ (row.parent or "") | cell }} | {{ (row.target or "") | cell }} |
+| {{ row.ts }} | {{ row.event_id }} | {{ row.event_type }} | {{ row.get("anomaly", "") }} | {{ (row.process or "") | cell }} | {{ (row.parent or "") | cell }} | {{ (row.target or "") | cell }} |
 {% endfor %}
+
+Anomaly is the event's score_anomaly percentile among baseline events of the same type, blank if no agent scored it. It measures how unusual an event is, not whether it is malicious.
 {% else %}
 No events to show.
 {% endif %}

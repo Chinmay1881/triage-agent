@@ -18,12 +18,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.agents.common import alert_block, handoff, to_json
 from app.agent.agents.reviewer import event_row
+from app.agent.agents.triage import anomaly_rows
 from app.agent.case import (
     MAX_RECOMMENDATIONS,
     WITHHELD,
     AssessDraft,
     AttackMapping,
     Case,
+    Evidence,
     Finding,
     MappingDraft,
     MappingsDraft,
@@ -202,12 +204,16 @@ def check_recommendations(
         if key in seen:
             continue
         seen.add(key)
+        # The target is LLM-written and a dropped one isn't an entity we know, so screen it.
+        (named,) = screen([draft.target])
         if draft.action == "close_as_benign" and case.verdict != "benign":
-            notes.append(f"Dropped close_as_benign: the verdict is {case.verdict}.")
+            notes.append(f"Dropped close_as_benign on {named}: the verdict is {case.verdict}.")
             continue
         allowed = targets.get(draft.action)
         if allowed is not None and draft.target.lower() not in allowed:
-            notes.append(f"Dropped {draft.action}: its target is not an entity in this case.")
+            notes.append(
+                f"Dropped {draft.action} on {named}: its target is not an entity in this case."
+            )
             continue
         kept.append(
             Recommendation(
@@ -250,7 +256,20 @@ def written_summary(case: Case) -> str:
     )
 
 
-def timeline_rows(docs: list[dict[str, Any]], flagged: set[str]) -> list[dict[str, Any]]:
+def anomaly_percentiles(evidence: Evidence) -> dict[str, float]:
+    """Event ID -> percentile, from the score_anomaly results already in the ledger, so the report
+    makes no tool call of its own and an event no agent scored stays blank."""
+    return {
+        row["event_id"]: row["percentile"]
+        for stored in evidence.answers.values()
+        if evidence.tool_refs[stored.ref].tool == "score_anomaly"
+        for row in anomaly_rows(stored.result)
+    }
+
+
+def timeline_rows(
+    docs: list[dict[str, Any]], flagged: set[str], percentiles: dict[str, float]
+) -> list[dict[str, Any]]:
     """Key events in time order. A row with an injection flag loses its log text: the report must
     not repeat what the logs tried to tell an AI."""
     rows = []
@@ -258,6 +277,8 @@ def timeline_rows(docs: list[dict[str, Any]], flagged: set[str]) -> list[dict[st
         row = event_row(doc)
         if doc["event_id"] in flagged:
             row["target"] = WITHHELD
+        if doc["event_id"] in percentiles:
+            row["anomaly"] = percentiles[doc["event_id"]]
         rows.append(row)
     return rows
 
@@ -405,7 +426,7 @@ def make_closure(deps: Deps) -> dict[str, Callable[[Case], Awaitable[dict[str, A
         wanted = list(dict.fromkeys([*state.alert.trigger_event_ids, *sorted(allowed)]))
         docs = await deps.telemetry.events(wanted)
         flagged = {f.event_id for f in state.evidence.injection_flags if f.event_id}
-        timeline = timeline_rows(docs, flagged)
+        timeline = timeline_rows(docs, flagged, anomaly_percentiles(state.evidence))
         prompt = {
             "alert": alert_block(state.alert),
             "verdict": state.verdict,
@@ -435,6 +456,12 @@ def make_closure(deps: Deps) -> dict[str, Callable[[Case], Awaitable[dict[str, A
                 "timeline": timeline,
                 "report_summary": summary or written_summary(state),
                 "closure_notes": notes,
+                "token_use": llm.usage.by_agent(),
+                "models_used": llm.usage.models_by_agent(),
+                "handoffs": [
+                    *state.handoffs,
+                    handoff(REPORT_AND_REVIEW, "analyst", "awaiting decision"),
+                ],
             }
         )
         return {
@@ -443,11 +470,9 @@ def make_closure(deps: Deps) -> dict[str, Callable[[Case], Awaitable[dict[str, A
             "closure_notes": notes,
             "report_md": render_report(written, []),
             "stop_reason": state.stop_reason or "complete",
-            "token_use": llm.usage.by_agent(),
-            "handoffs": [
-                *state.handoffs,
-                handoff(REPORT_AND_REVIEW, "analyst", "awaiting decision"),
-            ],
+            "token_use": written.token_use,
+            "models_used": written.models_used,
+            "handoffs": written.handoffs,
         }
 
     return {

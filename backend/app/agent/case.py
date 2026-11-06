@@ -269,6 +269,8 @@ class Evidence(_Strict):
     answers: dict[str, StoredAnswer] = {}
     free_repeats: dict[str, int] = {}
     injection_flags: list[InjectionFlag] = []
+    # How many log texts the injection scan has looked at, for the report's scan line.
+    texts_scanned: int = 0
 
 
 class Handoff(_Strict):
@@ -321,6 +323,8 @@ class Case(BaseModel):
 
     tool_logs: dict[str, list[ToolCallRecord]] = {}
     token_use: dict[str, dict[str, int]] = {}
+    # Agent -> the models its calls went to, for the report's Agent trail.
+    models_used: dict[str, list[str]] = {}
     handoffs: list[Handoff] = []
     evidence: Evidence = Evidence()
 

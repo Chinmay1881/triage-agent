@@ -130,6 +130,15 @@ class UsageLog:
     def by_model(self) -> dict[str, dict[str, int]]:
         return self._grouped(lambda c: c.model)
 
+    def models_by_agent(self) -> dict[str, list[str]]:
+        """The models each agent's calls really went to, in first-use order."""
+        out: dict[str, list[str]] = {}
+        for c in self.calls:
+            models = out.setdefault(c.agent, [])
+            if c.model and c.model not in models:
+                models.append(c.model)
+        return out
+
     def totals(self) -> dict[str, int]:
         return {
             "llm_calls": len(self.calls),

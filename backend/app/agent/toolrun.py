@@ -23,7 +23,7 @@ from app.agent.case import Evidence, StoredAnswer, ToolCallRecord, ToolRef, Tool
 from app.agent.context import event_ids_in, identifiers, shrink
 from app.agent.deps import Deps
 from app.agent.grounding import is_internal_ip
-from app.agent.injection import scan_tool_result
+from app.agent.injection import scan_tool_result, text_count
 from app.telemetry.models import Alert
 from app.tools import TOOLS
 from app.tools._common import WindowInput, iso
@@ -109,6 +109,7 @@ def record_result(
         args=args,
         digest=_digest(data),
     )
+    evidence.texts_scanned += text_count(data)
     known = {(f.event_id, f.field, f.method) for f in evidence.injection_flags}
     evidence.injection_flags += [
         f for f in scan_tool_result(result) if (f.event_id, f.field, f.method) not in known

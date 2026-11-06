@@ -13,15 +13,16 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agent.agents.common import alert_block, handoff, to_json, with_records
-from app.agent.case import Case, Category, Priority, TriageDecision, TriageDraft
+from app.agent.case import Case, Category, Evidence, Priority, TriageDecision, TriageDraft
 from app.agent.deps import Deps
-from app.agent.injection import scan
+from app.agent.injection import scan, text_count
 from app.agent.prompts.system import SYSTEM
 from app.agent.prompts.triage import TRIAGE
 from app.agent.toolrun import run_call
 from app.config import CYBERINTEL, SENTINEL_TRIAGE
 from app.llm import LLMError
 from app.telemetry.decode import decode_encoded_command
+from app.telemetry.models import Alert
 from app.tools._common import cap_text, iso
 from app.tools.process import process_row
 
@@ -58,9 +59,9 @@ def trigger_row(doc: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def trigger_flags(docs: list[dict[str, Any]]) -> list[Any]:
-    """Scan the full command line and its decoded form, before the 300-character cap."""
-    flags = []
+def scan_alert(alert: Alert, docs: list[dict[str, Any]], evidence: Evidence) -> None:
+    """Scan the alert's description and each trigger's full command line and decoded form, before
+    the 300-character cap. `evidence` is updated in place."""
     for doc in docs:
         cmdline = (doc.get("process") or {}).get("cmdline")
         if not cmdline:
@@ -69,11 +70,14 @@ def trigger_flags(docs: list[dict[str, Any]]) -> list[Any]:
         decoded = decode_encoded_command(cmdline)
         if decoded is not None:
             fields["decoded_cmdline"] = decoded
-        flags += [
+        evidence.texts_scanned += text_count(fields)
+        evidence.injection_flags += [
             flag.model_copy(update={"field": f"trigger_events.{flag.field}"})
             for flag in scan(fields, event_id=doc["event_id"])
         ]
-    return flags
+    description = {"description": alert.description}
+    evidence.texts_scanned += text_count(description)
+    evidence.injection_flags += scan(description, "alert")
 
 
 def fallback_decision(severity: str, event_types: list[str]) -> TriageDraft:
@@ -100,13 +104,14 @@ def anomaly_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 def make_triage(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
     async def triage(state: Case) -> dict[str, Any]:
+        # Stamped now, not at the end of the node: the Agent trail times stages between handoffs.
+        received = handoff("alert", SENTINEL_TRIAGE)
         alert = state.alert
         evidence = state.evidence.model_copy(deep=True)
         docs = await deps.telemetry.events(alert.trigger_event_ids)
         for doc in docs:
             evidence.seen_event_ids.setdefault(doc["event_id"], "alert")
-        evidence.injection_flags += trigger_flags(docs)
-        evidence.injection_flags += scan({"description": alert.description}, "alert")
+        scan_alert(alert, docs, evidence)
 
         scored, record = await run_call(
             deps,
@@ -155,7 +160,7 @@ def make_triage(deps: Deps) -> Callable[[Case], Awaitable[dict[str, Any]]]:
             "token_use": deps.llm.usage.by_agent(),
             "handoffs": [
                 *state.handoffs,
-                handoff("alert", SENTINEL_TRIAGE),
+                received,
                 handoff(SENTINEL_TRIAGE, CYBERINTEL, f"{draft.priority} {draft.category}"),
             ],
         }

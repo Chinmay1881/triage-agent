@@ -4,15 +4,19 @@ report_summary (closure.py) has checked it before it gets here.
 """
 
 import re
+from collections import Counter
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from app.agent.case import Case
+from app.agent.case import Case, Evidence, Handoff
+from app.config import CYBERINTEL, INVESTIGATOR, REPORT_AND_REVIEW, REVIEWER, SENTINEL_TRIAGE
 from app.tools._common import iso
 
+STAGES = [SENTINEL_TRIAGE, CYBERINTEL, INVESTIGATOR, REVIEWER, REPORT_AND_REVIEW]
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 ATTACK_URL = "https://attack.mitre.org/techniques/"
 TECHNIQUE = re.compile(r"^T\d{4}(\.\d{3})?$")
@@ -102,6 +106,85 @@ def action_rows(case: Case, decisions: list[dict[str, Any]]) -> list[dict[str, A
     return rows
 
 
+def listed_indicators(case: Case) -> list[dict[str, Any]]:
+    rows = case.intel_brief.reputation if case.intel_brief else []
+    return [row for row in rows if row.get("reputation") != "unknown"]
+
+
+def counted(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def stage_seconds(handoffs: list[Handoff]) -> dict[str, float]:
+    """Each stage's time from being handed the case to handing it on. A reopen gives the
+    investigator and reviewer a second span, so spans add up; the wait for the analyst isn't one."""
+    seconds: dict[str, float] = {}
+    for received, passed_on in pairwise(handoffs):
+        spent = (passed_on.ts - received.ts).total_seconds()
+        seconds[received.to_agent] = seconds.get(received.to_agent, 0.0) + spent
+    return seconds
+
+
+def stage_outputs(case: Case) -> dict[str, str]:
+    indicators = listed_indicators(case)
+    known_bad = sum(row.get("reputation") == "known_bad" for row in indicators)
+    statuses = Counter(f.status for f in case.findings)
+    reviewed = f"{statuses['confirmed']} confirmed, {statuses['disputed']} disputed"
+    if statuses["unreviewed"]:
+        reviewed += f", {statuses['unreviewed']} unreviewed"
+    if case.reopened:
+        reviewed += ", reopened once"
+    closed = (
+        f"{case.verdict}, risk {case.risk_score}, "
+        f"{counted(len(case.attack_mappings), 'technique')}, "
+        f"{counted(len(case.recommendations), 'action')}"
+    )
+    return {
+        SENTINEL_TRIAGE: f"{case.triage.priority} {case.triage.category}"
+        if case.triage
+        else "no decision",
+        CYBERINTEL: f"{counted(len(indicators), 'indicator')}, {known_bad} known_bad"
+        if case.intel_brief
+        else "no brief",
+        INVESTIGATOR: counted(len(case.findings), "finding"),
+        REVIEWER: reviewed if case.review else "no review",
+        REPORT_AND_REVIEW: closed if case.verdict else "no verdict",
+    }
+
+
+def agent_trail(case: Case) -> list[dict[str, Any]]:
+    seconds = stage_seconds(case.handoffs)
+    outputs = stage_outputs(case)
+    return [
+        {
+            "stage": stage,
+            "models": ", ".join(case.models_used.get(stage, [])) or "none",
+            "llm_calls": case.token_use.get(stage, {}).get("calls", 0),
+            "tool_calls": sum(r.repeat_of is None for r in case.tool_logs.get(stage, [])),
+            "duration": f"{seconds[stage]:.1f} s" if stage in seconds else "not run",
+            "output": outputs[stage],
+        }
+        for stage in STAGES
+    ]
+
+
+def injection_line(evidence: Evidence) -> str:
+    """Counts, event IDs and methods only: flagged text never reaches the report."""
+    methods: dict[str, list[str]] = {}
+    for flag in evidence.injection_flags:
+        found = methods.setdefault(flag.event_id or "no event ID", [])
+        if flag.method not in found:
+            found.append(flag.method)
+    line = (
+        f"Injection scan: {counted(len(evidence.injection_flags), 'flag')} across "
+        f"{counted(evidence.texts_scanned, 'text')} (regex + classifier)."
+    )
+    if methods:
+        flagged = [f"{cell(event)} ({', '.join(found)})" for event, found in methods.items()]
+        line += f" Flagged: {', '.join(flagged)}."
+    return line
+
+
 def render_report(case: Case, decisions: list[dict[str, Any]]) -> str:
     """The whole report. `decisions` are the stored analyst decisions, oldest first."""
     verdict_decisions = [d for d in decisions if d["kind"] == "verdict"]
@@ -115,12 +198,10 @@ def render_report(case: Case, decisions: list[dict[str, Any]]) -> str:
         triage=case.triage,
         budget_reason=case.budget_reason,
         tool_calls_used=case.tool_calls_used,
+        trail=agent_trail(case),
         brief=case.intel_brief,
-        indicators=[
-            row
-            for row in (case.intel_brief.reputation if case.intel_brief else [])
-            if row.get("reputation") != "unknown"
-        ],
+        indicators=listed_indicators(case),
+        injection_line=injection_line(case.evidence),
         timeline=case.timeline,
         findings=case.reportable_findings(),
         disputed_count=sum(f.status == "disputed" for f in case.findings),

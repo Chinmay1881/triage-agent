@@ -576,6 +576,18 @@ async def test_the_report_shows_decisions_once_recorded() -> None:
     assert "| A1 | isolate_host | FIN-WS-01 | Contain the host. | approved: Could be" in after
 
 
+async def test_a_report_rebuilt_from_storage_keeps_the_new_sections() -> None:
+    h = Harness()
+    investigation_id = await h.finished_run()
+
+    report = (await h.report(investigation_id)).text
+
+    assert "| Sentinel-Triage | mock | 1 | 1 |" in report
+    assert "not run" not in report
+    assert f"| {TRIGGER} | process_start | 99.0 |" in report
+    assert "Injection scan: 0 flags across" in report
+
+
 # --- evals -----------------------------------------------------------------------------------
 
 

@@ -135,6 +135,11 @@ def _strings(value: Any, path: str, event_id: str | None) -> Iterator[tuple[str,
         yield path, value, event_id
 
 
+def text_count(value: Any) -> int:
+    """How many texts scan() looks at in `value`."""
+    return sum(1 for _ in _strings(value, "", None))
+
+
 def screen(texts: list[str]) -> list[str]:
     """LLM-written texts as later prompts may show them: WITHHELD if a pattern matches. Regex
     only: the classifier's false positives on the model's own English cost real findings."""

@@ -142,6 +142,11 @@ async def test_tokens_are_reported_per_agent_and_model() -> None:
     assert set(by_agent) == {"Sentinel-Triage", "Investigator-Agent", "Reviewer-Agent"}
     assert by_model["big-model"]["calls"] == 2 and by_model["big-model"]["billed_tokens"] == 240
     assert by_model["openai/gpt-oss-20b"]["calls"] == 1
+    assert llm.usage.models_by_agent() == {
+        "Sentinel-Triage": ["openai/gpt-oss-20b"],
+        "Investigator-Agent": ["big-model"],
+        "Reviewer-Agent": ["big-model"],
+    }
 
 
 async def test_bucket_waits_only_for_the_missing_tokens() -> None:

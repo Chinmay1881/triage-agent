@@ -1,6 +1,7 @@
 """Report & Human Review with a scripted MockLLM: mapping and its retries, the verdict rules,
 recommendations and the report. The LLM proposes; these tests are about what code lets stand."""
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,6 +10,7 @@ from langchain_core.messages import AIMessage
 
 from app.agent.agents.closure import (
     NO_SUPPORT,
+    anomaly_percentiles,
     apply_verdict_rules,
     check_recommendations,
     checked_summary,
@@ -21,15 +23,28 @@ from app.agent.case import (
     Case,
     Evidence,
     Finding,
+    Handoff,
     InjectionFlag,
     IntelBrief,
     MappingDraft,
     Recommendation,
     RecommendationDraft,
+    Review,
+    StoredAnswer,
+    ToolCallRecord,
     ToolRef,
     TriageDecision,
 )
-from app.agent.report import attack_url, cell, render_report
+from app.agent.injection import text_count
+from app.agent.report import (
+    agent_trail,
+    attack_url,
+    cell,
+    injection_line,
+    render_report,
+    stage_seconds,
+)
+from app.config import REPORT_AND_REVIEW
 from app.llm import LLMError
 from app.ml.injection import InjectionModel
 from tests.test_agent_graph import (
@@ -38,6 +53,7 @@ from tests.test_agent_graph import (
     OBSERVED,
     PARENT,
     PLANTED,
+    TRIAGE,
     TRIGGER,
     deps,
     process_doc,
@@ -408,6 +424,7 @@ SECTIONS = [
     "Summary",
     "Alert",
     "Triage decision",
+    "Agent trail",
     "Intel brief",
     "Key event timeline",
     "Findings",
@@ -488,11 +505,204 @@ async def test_a_summary_with_an_injection_pattern_is_replaced() -> None:
 def test_flagged_events_lose_their_log_text_in_the_timeline() -> None:
     doc = process_doc(TRIGGER, f"cmd /c echo {PLANTED}")
 
-    (row,) = timeline_rows([doc], {TRIGGER})
-    (clean,) = timeline_rows([doc], set())
+    (row,) = timeline_rows([doc], {TRIGGER}, {})
+    (clean,) = timeline_rows([doc], set(), {})
 
     assert PLANTED[:30] not in str(row) and "withheld" in row["target"]
     assert PLANTED[:30] in str(clean)
+
+
+def test_percentiles_come_from_score_anomaly_results_in_the_ledger() -> None:
+    scored = {"untrusted_log_data": [{"event_id": TRIGGER, "score": 0.7, "percentile": 99.2}]}
+    other = {"untrusted_log_data": [{"event_id": OTHER_EVENT, "score": 0.7, "percentile": 1.0}]}
+    evidence = Evidence(
+        tool_refs={
+            "tool:score_anomaly#1": ToolRef(tool="score_anomaly", ok=True),
+            "tool:search_process_events#2": ToolRef(tool="search_process_events", ok=True),
+        },
+        answers={
+            "a": StoredAnswer(ref="tool:score_anomaly#1", agent="x", result=scored),
+            "b": StoredAnswer(ref="tool:search_process_events#2", agent="x", result=other),
+        },
+    )
+
+    assert anomaly_percentiles(evidence) == {TRIGGER: 99.2}
+
+
+def test_timeline_shows_a_percentile_only_for_events_that_have_one() -> None:
+    scored, blank = timeline_rows(
+        [process_doc(TRIGGER, "a"), process_doc(CHILD, "b")], set(), {TRIGGER: 0.0}
+    )
+
+    assert scored["anomaly"] == 0.0 and "anomaly" not in blank
+
+
+async def test_report_timeline_uses_the_score_triage_already_paid_for() -> None:
+    d, _, calls = deps()
+
+    state = (await run(d)).state
+
+    assert f"| {TRIGGER} | process_start | 99.0 |" in (state.report_md or "")
+    # The report stage logs no tool call, and every call that ran belongs to an agent's log.
+    assert REPORT_AND_REVIEW not in state.tool_logs
+    assert len(calls) == sum(len(logged) for logged in state.tool_logs.values())
+
+
+def test_a_dropped_action_names_its_target() -> None:
+    _, (outside,) = check_recommendations([draft("isolate_host", "PROD-DB-99")], verdict_case())
+    _, (closed,) = check_recommendations([draft("close_as_benign", "alt_0001")], verdict_case())
+
+    assert "isolate_host on PROD-DB-99" in outside
+    assert "close_as_benign on alt_0001" in closed
+
+
+def test_a_dropped_target_with_an_injection_pattern_is_withheld() -> None:
+    _, (note,) = check_recommendations([draft("isolate_host", PLANTED)], verdict_case())
+
+    assert PLANTED[:30] not in note and "withheld" in note
+
+
+async def test_report_title_names_the_rule() -> None:
+    d, _, _ = deps()
+
+    report = (await run(d)).state.report_md or ""
+
+    assert report.startswith("# Triage report: alt_0001, Office app spawned PowerShell\n")
+
+
+def at(second: int) -> datetime:
+    return datetime(2026, 10, 6, 10, 0, second, tzinfo=UTC)
+
+
+def test_stage_time_adds_up_across_a_reopen_and_stops_at_the_analyst() -> None:
+    hops = [
+        Handoff(from_agent="alert", to_agent="Sentinel-Triage", ts=at(0)),
+        Handoff(from_agent="Sentinel-Triage", to_agent="Investigator-Agent", ts=at(2)),
+        Handoff(from_agent="Investigator-Agent", to_agent="Reviewer-Agent", ts=at(5)),
+        Handoff(from_agent="Reviewer-Agent", to_agent="Investigator-Agent", ts=at(6)),
+        Handoff(from_agent="Investigator-Agent", to_agent="Reviewer-Agent", ts=at(10)),
+        Handoff(from_agent="Reviewer-Agent", to_agent="analyst", ts=at(13)),
+    ]
+
+    assert stage_seconds(hops) == {
+        "Sentinel-Triage": 2.0,
+        "Investigator-Agent": 7.0,
+        "Reviewer-Agent": 4.0,
+    }
+
+
+def record(name: str, repeat_of: str | None = None) -> ToolCallRecord:
+    return ToolCallRecord(
+        ref="tool:x#1", agent="a", name=name, args={}, ok=True, repeat_of=repeat_of
+    )
+
+
+def test_agent_trail_rows_come_from_the_case() -> None:
+    case = Case(
+        alert=ALERT,
+        triage=TriageDecision(priority="P2", category="endpoint", reason="r"),
+        intel_brief=IntelBrief(
+            reputation=[
+                {"indicator": "a.example", "reputation": "known_bad"},
+                {"indicator": "b.example", "reputation": "known_good"},
+                {"indicator": "c.example", "reputation": "unknown"},
+            ]
+        ),
+        findings=[
+            Finding(id="F1", claim="c", kind="observation", citations=[], tool="t", status=status)
+            for status in ("confirmed", "confirmed", "disputed", "unreviewed")
+        ],
+        review=Review(),
+        reopened=1,
+        verdict="malicious",
+        risk_score=73,
+        recommendations=[Recommendation(id="A1", action="escalate", target="x", reason="r")],
+        models_used={"Investigator-Agent": ["big-model"]},
+        token_use={"Investigator-Agent": {"calls": 3}},
+        tool_logs={"Investigator-Agent": [record("a"), record("b"), record("a", "tool:a#1")]},
+    )
+
+    trail = {row["stage"]: row for row in agent_trail(case)}
+
+    assert list(trail) == [
+        "Sentinel-Triage",
+        "CyberIntel-Agent",
+        "Investigator-Agent",
+        "Reviewer-Agent",
+        "Report & Human Review",
+    ]
+    investigator = trail["Investigator-Agent"]
+    assert investigator["models"] == "big-model" and investigator["llm_calls"] == 3
+    assert investigator["tool_calls"] == 2 and investigator["output"] == "4 findings"
+    assert trail["Sentinel-Triage"]["output"] == "P2 endpoint"
+    assert trail["Sentinel-Triage"]["models"] == "none"
+    assert trail["Sentinel-Triage"]["duration"] == "not run"
+    assert trail["CyberIntel-Agent"]["output"] == "2 indicators, 1 known_bad"
+    assert (
+        trail["Reviewer-Agent"]["output"] == "2 confirmed, 1 disputed, 1 unreviewed, reopened once"
+    )
+    assert trail["Report & Human Review"]["output"] == "malicious, risk 73, 0 techniques, 1 action"
+
+
+async def test_report_trail_is_complete_when_the_report_is_written() -> None:
+    def slow_triage(messages: Any) -> dict[str, Any]:
+        time.sleep(0.05)
+        return TRIAGE
+
+    d, _, _ = deps({"triage": [slow_triage]})
+
+    state = (await run(d)).state
+
+    report = state.report_md or ""
+    assert "| Sentinel-Triage | mock | 1 | 1 |" in report and "| P2 endpoint |" in report
+    assert "| Report & Human Review | mock | 4 | 0 |" in report
+    assert "| malicious, risk" in report
+    # Triage's time is measured from the start of its node, so it isn't zero.
+    assert stage_seconds(state.handoffs)["Sentinel-Triage"] >= 0.04
+
+
+def test_text_count_matches_what_the_scan_looks_at() -> None:
+    assert text_count({"a": "long enough to scan", "b": ["short", "also long enough"], "c": 5}) == 2
+
+
+async def test_every_scanned_text_is_counted() -> None:
+    d, _, _ = deps(docs=[process_doc(TRIGGER, "powershell.exe -nop -w hidden")])
+
+    state = (await run(d)).state
+
+    # The trigger's command line, the alert's description, and the tool results after them.
+    assert state.evidence.texts_scanned > 2
+    assert f"across {state.evidence.texts_scanned} texts" in (state.report_md or "")
+
+
+def test_injection_line_lists_event_ids_and_methods_only() -> None:
+    evidence = Evidence(
+        texts_scanned=31,
+        injection_flags=[
+            InjectionFlag(event_id=TRIGGER, field="process.cmdline", method="regex", score=1.0),
+            InjectionFlag(
+                event_id=TRIGGER, field="process.cmdline", method="classifier", score=0.9
+            ),
+            InjectionFlag(event_id=None, field="alert.description", method="regex", score=1.0),
+        ],
+    )
+
+    assert injection_line(evidence) == (
+        "Injection scan: 3 flags across 31 texts (regex + classifier). "
+        f"Flagged: {TRIGGER} (regex, classifier), no event ID (regex)."
+    )
+    assert injection_line(Evidence(texts_scanned=1)) == (
+        "Injection scan: 0 flags across 1 text (regex + classifier)."
+    )
+
+
+async def test_a_flagged_trigger_is_named_in_the_scan_line_without_its_text() -> None:
+    d, _, _ = deps(docs=[process_doc(TRIGGER, f"cmd /c echo {PLANTED}")])
+
+    report = (await run(d)).state.report_md or ""
+
+    (line,) = [row for row in report.splitlines() if row.startswith("Injection scan:")]
+    assert TRIGGER in line and "regex" in line and "ignore your previous" not in line
 
 
 async def test_injection_in_a_trigger_never_reaches_the_report() -> None:
