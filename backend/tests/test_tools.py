@@ -123,18 +123,8 @@ def test_filters_are_escaped_not_regex() -> None:
         ("search_process_events", {"host": "FIN-WS-01"}, "give start and end, or around"),
         (
             "search_process_events",
-            {
-                "host": "FIN-WS-01",
-                "around": ALERT_TS,
-                "start": "2026-10-06T09:00:00Z",
-                "end": "2026-10-06T11:00:00Z",
-            },
-            "use either around or start and end",
-        ),
-        (
-            "get_logon_history",
-            {"user": "a.b", "around": ALERT_TS, "start": "2026-10-06T09:00:00Z"},
-            "use either around or start and end",
+            {"host": "FIN-WS-01", "start": "2026-10-06T09:00:00Z"},
+            "give both start and end",
         ),
         (
             "search_process_events",
@@ -524,6 +514,45 @@ def test_window_just_over_the_limit_says_so_exactly() -> None:
 
     note = params.window_note()
     assert note is not None and "24 h 5 min" in note
+
+
+def test_around_is_ignored_when_start_and_end_are_given() -> None:
+    params = ProcessSearchInput(
+        host="FIN-WS-01",
+        around="2026-10-06T10:00:00Z",
+        start="2026-10-06T09:00:00Z",
+        end="2026-10-06T09:30:00Z",
+    )
+
+    start, end = params.bounds()
+    assert start == datetime(2026, 10, 6, 9, 0, tzinfo=UTC)
+    assert end == datetime(2026, 10, 6, 9, 30, tzinfo=UTC)
+    assert "around was ignored" in (params.window_note() or "")
+
+
+def test_around_is_used_when_only_one_of_start_and_end_is_given() -> None:
+    params = ProcessSearchInput(
+        host="FIN-WS-01", around="2026-10-06T10:00:00Z", start="2026-10-06T09:00:00Z"
+    )
+
+    start, end = params.bounds()
+    assert (start, end) == (
+        datetime(2026, 10, 6, 8, 0, tzinfo=UTC),
+        datetime(2026, 10, 6, 12, 0, tzinfo=UTC),
+    )
+    assert "around was used" in (params.window_note() or "")
+
+
+def test_both_notes_are_kept_for_a_long_window_with_around() -> None:
+    params = ProcessSearchInput(
+        host="FIN-WS-01",
+        around="2026-10-06T10:00:00Z",
+        start="2026-10-05T00:00:00Z",
+        end="2026-10-08T00:00:00Z",
+    )
+
+    note = params.window_note() or ""
+    assert "around was ignored" in note and "72 h" in note
 
 
 def test_window_of_exactly_24_hours_is_left_alone() -> None:

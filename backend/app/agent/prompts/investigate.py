@@ -12,7 +12,8 @@ returned under intel_rule.
 - Cite event_ids for everything you rely on.
 - score_anomaly measures how unusual an event is, not whether it is malicious.
 - Time windows: give start and end (UTC; longer than 24 h is cut to its last 24 h), or around \
-for +-2 h, or nothing for the alert time +-2 h. Never around together with start and end.
+for +-2 h, or nothing for the alert time +-2 h. If you send around with start and end, around \
+is ignored.
 - You have {budget} tool calls in total; every result says how many are left. Stop when each \
 hypothesis is supported or ruled out by evidence, and reply with one short paragraph of what \
 you found, without a tool call."""

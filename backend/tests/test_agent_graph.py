@@ -40,6 +40,7 @@ from app.agent.case import (
 from app.agent.chain import RunResult, build_chain, build_investigator, run_case
 from app.agent.deps import Deps
 from app.agent.injection import scan_tool_result, screen
+from app.agent.prompts.summarize import SUMMARIZE
 from app.config import CYBERINTEL, INVESTIGATOR, REVIEWER, SENTINEL_TRIAGE, get_settings
 from app.llm import InvalidToolCallError, LLMError, MockLLM
 from app.ml.injection import InjectionModel
@@ -912,6 +913,127 @@ def test_the_absence_regex_overrides_a_mislabelled_finding() -> None:
 
     # Relabelled as absence, and an event citation can't back an absence claim.
     assert new == [] and dropped == 1
+
+
+def event_doc(event_id: str, event_type: str, name: str, **payload: Any) -> dict[str, Any]:
+    process = {"pid": 77, "name": name}
+    return {
+        "event_id": event_id,
+        "ts": TS,
+        "host": "FIN-WS-01",
+        "user": "a.b",
+        "event_type": event_type,
+        "process": process,
+    } | payload
+
+
+async def test_traffic_claims_citing_a_groups_sample_event_ids_survive() -> None:
+    # Network and DNS tools return groups with sample event_ids, not one row per event.
+    beacon = event_doc(
+        "evt_000030",
+        "network_conn",
+        "msupdate.exe",
+        network={"src_ip": "10.20.1.12", "dst_ip": "203.0.113.9", "dst_port": 443},
+    )
+    lookup = event_doc(
+        "evt_000031",
+        "dns_query",
+        "msupdate.exe",
+        dns={"query": "bad-site.example", "answers": ["203.0.113.9"]},
+    )
+    network_group = {
+        "untrusted_log_data": [
+            {
+                "dst_ip": "203.0.113.9",
+                "dst_port": 443,
+                "count": 3,
+                "processes": [{"name": "msupdate.exe", "pid": 77}],
+                "event_ids": ["evt_000030"],
+            }
+        ],
+        "total": 1,
+        "shown": 1,
+    }
+    dns_group = {
+        "untrusted_log_data": [
+            {
+                "domain": "bad-site.example",
+                "count": 1,
+                "answers": ["203.0.113.9"],
+                "processes": [{"name": "msupdate.exe", "pid": 77}],
+                "event_ids": ["evt_000031"],
+            }
+        ],
+        "total": 1,
+        "shown": 1,
+    }
+    claims = {
+        "findings": [
+            {
+                "claim": "msupdate.exe connected to 203.0.113.9 on port 443",
+                "kind": "observation",
+                "citations": ["evt_000030"],
+            },
+            {
+                "claim": "msupdate.exe resolved bad-site.example",
+                "kind": "observation",
+                "citations": ["evt_000031"],
+            },
+        ]
+    }
+    calls = [
+        tool_call("get_network_connections", host="FIN-WS-01"),
+        tool_call("get_dns_queries", host="FIN-WS-01"),
+    ]
+    d, _, _ = deps(
+        {"investigate": [AIMessage("", tool_calls=calls), DONE], "summarize_findings": [claims]},
+        {"get_network_connections": network_group, "get_dns_queries": dns_group},
+        docs=[process_doc(TRIGGER, "powershell.exe -nop"), beacon, lookup],
+    )
+
+    state = (await run(d)).state
+
+    assert [f.citations for f in state.findings] == [["evt_000030"], ["evt_000031"]]
+    assert state.findings_dropped == 0 and state.citations_removed == 0
+
+
+async def test_traffic_claim_citing_only_a_tool_ref_is_dropped() -> None:
+    def tool_ref_only(messages: Sequence[BaseMessage]) -> dict[str, Any]:
+        ref = ref_in(messages, "get_network_connections")
+        return {
+            "findings": [
+                {
+                    "claim": "msupdate.exe connected to 203.0.113.9",
+                    "kind": "observation",
+                    "citations": [ref],
+                }
+            ]
+        }
+
+    group = {
+        "untrusted_log_data": [{"dst_ip": "203.0.113.9", "event_ids": ["evt_000030"]}],
+        "total": 1,
+        "shown": 1,
+    }
+    d, _, _ = deps(
+        {
+            "investigate": [
+                AIMessage("", tool_calls=[tool_call("get_network_connections", host="FIN-WS-01")]),
+                DONE,
+            ],
+            "summarize_findings": [tool_ref_only],
+        },
+        {"get_network_connections": group},
+    )
+
+    state = (await run(d)).state
+
+    assert state.findings == [] and state.findings_dropped == 1
+
+
+def test_summarize_prompt_states_the_citation_rule() -> None:
+    assert "sample event_ids in network and DNS groups" in SUMMARIZE
+    assert "a tool ref alone can't support it" in SUMMARIZE
 
 
 async def test_at_most_eight_findings_are_kept() -> None:

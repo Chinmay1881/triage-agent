@@ -6,9 +6,12 @@ the assessment.
 
 Each finding has a kind and citations:
 - kind "observation": something the logs show. Cite the event_ids that show it, and name in the \
-claim the process, file, IP, domain or hash those events contain. Host and user facts and \
-reputation facts have no event: cite the tool result instead, such as "tool:get_host_info#3", \
-using the ref in tool_calls or intel_facts, and name the host, user or indicator in the claim.
+claim the process, file, IP, domain or hash those events contain. An action claim (a process \
+started, spawned, wrote, created, connected, downloaded or resolved something) must cite event \
+IDs taken from the tool rows, including the sample event_ids in network and DNS groups; a tool \
+ref alone can't support it. Only host and user facts and reputation facts cite the tool result \
+instead, such as "tool:get_host_info#3", using the ref in tool_calls or intel_facts, and name \
+the host, user or indicator in the claim.
 - kind "absence": something that did not happen ("no X observed"). Cite the ref of the tool \
 call that looked for it, and say exactly what was searched. Claim only what that search covered.
 
