@@ -34,6 +34,7 @@ from app.agent.case import (
     FindingDraft,
     PlanDraft,
     ReviewDraft,
+    StoredAnswer,
     ToolCallRecord,
     ToolRef,
 )
@@ -41,6 +42,7 @@ from app.agent.chain import RunResult, build_chain, build_investigator, run_case
 from app.agent.deps import Deps
 from app.agent.injection import scan_tool_result, screen
 from app.agent.prompts.summarize import SUMMARIZE
+from app.agent.toolrun import DIGEST_CHARS, record_result
 from app.config import (
     CYBERINTEL,
     INVESTIGATOR,
@@ -1334,6 +1336,61 @@ def test_cited_tool_results_appear_with_their_args_and_digest() -> None:
     assert entry["cited_tool_results"] == [
         {"ref": "tool:get_dns_queries#4", "ok": True, "args": {"host": "FIN-WS-01"}, "result": "[]"}
     ]
+
+
+# s01's live run: one row is longer than the digest, so the beacon row was never seen.
+DOWNLOAD_ROW = {
+    "dst_ip": "203.0.113.116",
+    "dst_port": 80,
+    "count": 1,
+    "bytes_out": 420,
+    "bytes_in": 290036,
+    "first_seen": "2026-10-06T09:55:12Z",
+    "processes": [{"name": "powershell.exe", "pid": 9396}],
+    "event_ids": ["evt_004049"],
+    "last_seen": "2026-10-06T09:55:12Z",
+    "domains": ["invoice-portal.example"],
+}
+BEACON_ROW = DOWNLOAD_ROW | {
+    "dst_port": 443,
+    "count": 3,
+    "processes": [{"name": "msupdate.exe", "pid": 24756}],
+    "event_ids": ["evt_004054", "evt_004087", "evt_004127"],
+}
+
+
+def cited_network_result(claim: str) -> tuple[Finding, Evidence]:
+    evidence = Evidence()
+    args = {"host": "FIN-WS-02", "remote_ip": "203.0.113.116"}
+    result = {"untrusted_log_data": [DOWNLOAD_ROW, BEACON_ROW], "total": 2, "shown": 2}
+    ref, _ = record_result("get_network_connections", args, result, evidence)
+    evidence.answers["key"] = StoredAnswer(ref=ref, agent="Investigator-Agent", result=result)
+    finding_ = finding("F6").model_copy(update={"claim": claim, "citations": [ref]})
+    return finding_, evidence
+
+
+def test_reviewer_sees_the_cited_row_the_claim_is_about_first() -> None:
+    claim = "msupdate.exe made outbound HTTPS connections to 203.0.113.116:443"
+    finding_, evidence = cited_network_result(claim)
+    ref = finding_.citations[0]
+    assert "msupdate.exe" not in evidence.tool_refs[ref].digest  # the defect: cut off
+
+    (entry,) = evidence_by_finding([finding_], {}, evidence)
+
+    shown = entry["cited_tool_results"][0]["result"]
+    assert "msupdate.exe" in shown and '"dst_port":443' in shown
+    # No more tokens than before: the same cap.
+    assert len(shown) <= DIGEST_CHARS
+
+
+def test_cited_rows_keep_their_order_when_the_claim_names_none_of_them() -> None:
+    finding_, evidence = cited_network_result("an outbound connection was made")
+
+    (entry,) = evidence_by_finding([finding_], {}, evidence)
+
+    assert (
+        entry["cited_tool_results"][0]["result"] == evidence.tool_refs[finding_.citations[0]].digest
+    )
 
 
 async def test_reviewer_reopens_at_most_once() -> None:

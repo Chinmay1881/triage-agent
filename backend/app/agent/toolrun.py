@@ -22,7 +22,7 @@ from typing import Any, Literal
 from app.agent.case import Evidence, StoredAnswer, ToolCallRecord, ToolRef, ToolSource
 from app.agent.context import event_ids_in, identifiers, shrink
 from app.agent.deps import Deps
-from app.agent.grounding import is_internal_ip
+from app.agent.grounding import is_internal_ip, names_entity, text_entities, tool_entities
 from app.agent.injection import scan_tool_result, text_count
 from app.telemetry.models import Alert
 from app.tools import TOOLS
@@ -88,6 +88,30 @@ def _digest(data: Any) -> str:
         return ""
     text = json.dumps(data, separators=(",", ":"), default=str, ensure_ascii=False)
     return text if len(text) <= DIGEST_CHARS else text[: DIGEST_CHARS - 1] + "…"
+
+
+def claim_digest(claim: str, ref: str, evidence: Evidence) -> str:
+    """A cited result as the reviewer sees it for one claim: the same DIGEST_CHARS as the
+    stored digest, but rows naming more of the claim's entities come first. One network row is
+    longer than the digest, so the row a claim is about was cut off behind the rows before it
+    (s01: msupdate.exe's beacons sat behind powershell.exe's download, and a true finding was
+    disputed). Same size, so the reviewer's prompt costs no more tokens."""
+    info = evidence.tool_refs[ref]
+    stored = next((a for a in evidence.answers.values() if a.ref == ref), None)
+    rows = stored.result.get("untrusted_log_data") if stored is not None else None
+    if not isinstance(rows, list):
+        return info.digest
+    # The ledger's entities hold IPs, domains and hashes but not process names, so add the
+    # file names, IPs and domains written in the claim itself.
+    named = {e.lower() for e in tool_entities(ref, evidence) if names_entity(claim, e)}
+    named |= {e.lower() for e in text_entities(claim)}
+
+    def matches(row: Any) -> int:
+        text = json.dumps(row, default=str, ensure_ascii=False).lower()
+        return sum(entity in text for entity in named)
+
+    # sorted is stable: with nothing named, the order and so the digest are unchanged.
+    return _digest(sorted(rows, key=matches, reverse=True))
 
 
 def record_result(

@@ -23,7 +23,7 @@ from app.agent.deps import Deps
 from app.agent.injection import screen
 from app.agent.prompts.review import REOPEN, REVIEW, REVIEW_VERDICT
 from app.agent.prompts.system import SYSTEM
-from app.agent.toolrun import auto_reputation, run_call
+from app.agent.toolrun import auto_reputation, claim_digest, run_call
 from app.config import INVESTIGATOR, REPORT_AND_REVIEW, REVIEWER
 from app.llm import LLMError
 from app.telemetry.decode import decode_encoded_command
@@ -138,9 +138,8 @@ def evidence_by_finding(
         for citation in finding.citations:
             info = evidence.tool_refs.get(citation)
             if info is not None:
-                refs.append(
-                    {"ref": citation, "ok": info.ok, "args": info.args, "result": info.digest}
-                )
+                result = claim_digest(finding.shown_claim(), citation, evidence)
+                refs.append({"ref": citation, "ok": info.ok, "args": info.args, "result": result})
         out.append(
             {
                 "finding": finding.id,

@@ -9,6 +9,8 @@ Groq's free tier allows about 8,000 tokens a minute, so `GroqLLM`:
   fits, which avoids most 429s instead of reacting to them;
 - retries HTTP 429 itself (the SDK's own retries are off), sleeping for `retry-after` when the
   server sends it and backing off exponentially when it doesn't;
+- fits each request's `max_tokens` under the per-minute limit, since Groq refuses (HTTP 413) a
+  single request whose input plus `max_tokens` is above it, and no wait can fix that;
 - retries a structured output that fails to parse, or that Groq's strict schema check
   rejects, once with the error, then fails cleanly (spec: "Flaky output");
 - logs tokens and latency for every call and keeps a per-run tally per node, agent and model.
@@ -40,6 +42,11 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 # Expected completion size used for pacing; max_tokens would be far too pessimistic.
 EXPECTED_OUTPUT_TOKENS = 600
+# Headroom on our len/4 input estimate when fitting max_tokens under the per-minute limit, in
+# percent: integer maths, since 6000 * 1.1 is 6600.000000000001 in floating point.
+REQUEST_MARGIN_PCT = 10
+# Below this, a reasoning model can't finish a useful answer, so the call isn't worth its tokens.
+MIN_OUTPUT_TOKENS = 512
 # Groq's wording: "... on tokens per day (TPD): Limit 200000, Used 199657, Requested 1547."
 TOKENS_USED_TODAY = re.compile(r"tokens per day.*?Used (\d+)", re.IGNORECASE | re.DOTALL)
 
@@ -236,6 +243,17 @@ def error_text(exc: groq.APIStatusError) -> tuple[str | None, str]:
     return error.get("code"), str(error.get("message", f"HTTP {exc.status_code}"))[:300]
 
 
+def output_budget(estimate: int, tpm_limit: int, max_tokens: int) -> int | None:
+    """max_tokens for one request, or None if the input leaves no useful room for an answer.
+
+    Groq checks input plus max_tokens against the tokens-a-minute limit before running a
+    request and refuses one above it with 413. On the free tier (8,000) a reopened run's
+    summarize_findings hit this: about 7,200 input tokens plus the default 2,048."""
+    margin = (estimate * REQUEST_MARGIN_PCT + 99) // 100  # rounded up
+    room = tpm_limit - estimate - margin
+    return min(max_tokens, room) if room >= MIN_OUTPUT_TOKENS else None
+
+
 def retry_after(exc: groq.RateLimitError) -> float | None:
     """Seconds the server asked us to wait, from retry-after or Groq's reset header."""
     headers = exc.response.headers
@@ -291,14 +309,25 @@ class GroqLLM:
     async def _call(
         self,
         node: str,
-        runnable: Any,
+        build: Callable[[BaseChatModel], Any],
         messages: Sequence[BaseMessage],
         estimate: int,
-        effort: str | None,
     ) -> Any:
+        """`build` turns the node's chat model into the runnable (tools bound, or structured
+        output); it gets a copy whose max_tokens fits this request under the minute limit."""
         retries = 0
         bucket = self.bucket_for(node)
         model = self._settings.model_for(node)
+        chat, effort = self._chat(node)
+        limit = self._settings.llm_tpm_limit
+        max_tokens = output_budget(estimate, limit, self._settings.llm_max_tokens)
+        if max_tokens is None:
+            # Refused here rather than by Groq: same outcome, but no request is spent on it.
+            raise LLMError(
+                f"{node}: request of about {estimate} tokens leaves no room for an answer under "
+                f"the {limit} tokens-a-minute limit"
+            )
+        runnable = build(chat.model_copy(update={"max_tokens": max_tokens}))
         while True:
             await bucket.wait_for(estimate + EXPECTED_OUTPUT_TOKENS)
             started = self._clock()
@@ -337,6 +366,13 @@ class GroqLLM:
                 retries += 1
                 await self._sleep(delay)
                 continue
+            except groq.APIStatusError as exc:
+                # 413: the request alone is over a limit; output_budget should prevent it, but
+                # Groq's count can differ from our estimate. Nodes degrade on LLMError.
+                if exc.status_code != 413:
+                    raise
+                _, message = error_text(exc)
+                raise LLMError(f"{node}: request too large: {message}") from None
             raw = result["raw"] if isinstance(result, dict) else result
             usage = getattr(raw, "usage_metadata", None) or {}
             details = usage.get("input_token_details") or {}
@@ -357,11 +393,12 @@ class GroqLLM:
     async def invoke_tools(
         self, node: str, messages: Sequence[BaseMessage], tools: list[dict[str, Any]]
     ) -> AIMessage:
-        chat, effort = self._chat(node)
-        runnable = chat.bind_tools(tools)
         try:
             return await self._call(
-                node, runnable, messages, estimate_tokens(messages, tools), effort
+                node,
+                lambda chat: chat.bind_tools(tools),
+                messages,
+                estimate_tokens(messages, tools),
             )
         except groq.BadRequestError as exc:
             code, message = error_text(exc)
@@ -375,17 +412,16 @@ class GroqLLM:
     async def invoke_structured(
         self, node: str, messages: Sequence[BaseMessage], schema: type[T]
     ) -> T:
-        chat, effort = self._chat(node)
-        runnable = chat.with_structured_output(
-            schema, method="json_schema", strict=True, include_raw=True
-        )
+        def build(chat: BaseChatModel) -> Any:
+            return chat.with_structured_output(
+                schema, method="json_schema", strict=True, include_raw=True
+            )
+
         attempt = list(messages)
         for _ in range(2):
             error: Any
             try:
-                result = await self._call(
-                    node, runnable, attempt, estimate_tokens(attempt, None), effort
-                )
+                result = await self._call(node, build, attempt, estimate_tokens(attempt, None))
             except groq.BadRequestError as exc:
                 code, message = error_text(exc)
                 # Groq checks strict output against the schema itself and rejects a mismatch

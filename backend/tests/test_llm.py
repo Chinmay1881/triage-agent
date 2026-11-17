@@ -9,7 +9,15 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.llm import GroqLLM, InvalidToolCallError, LLMError, MockLLM, TokenBucket, get_model
+from app.llm import (
+    GroqLLM,
+    InvalidToolCallError,
+    LLMError,
+    MockLLM,
+    TokenBucket,
+    get_model,
+    output_budget,
+)
 
 
 class FakeClock:
@@ -47,6 +55,11 @@ class FakeRunnable:
 class FakeChat:
     def __init__(self, runnable: FakeRunnable) -> None:
         self.runnable = runnable
+        self.max_tokens: list[int] = []
+
+    def model_copy(self, update: dict[str, Any]) -> "FakeChat":
+        self.max_tokens.append(update["max_tokens"])
+        return self
 
     def bind_tools(self, tools: list[dict[str, Any]]) -> FakeRunnable:
         return self.runnable
@@ -65,6 +78,7 @@ def groq_llm(
     clock: FakeClock,
     efforts: dict[str, str] | None = None,
     built: list[str | None] | None = None,
+    chats: list[FakeChat] | None = None,
     **settings: Any,
 ) -> GroqLLM:
     s = get_settings().model_copy(update=settings)
@@ -72,7 +86,10 @@ def groq_llm(
     def chat_for(model: str, effort: str | None) -> FakeChat:
         if built is not None:
             built.append(effort)
-        return FakeChat(runnable)
+        chat = FakeChat(runnable)
+        if chats is not None:
+            chats.append(chat)
+        return chat
 
     return GroqLLM(chat_for, s, efforts, clock=clock, sleep=clock.sleep)  # type: ignore[arg-type]
 
@@ -340,3 +357,43 @@ async def test_long_retry_after_fails_fast_with_the_reason() -> None:
     with pytest.raises(LLMError, match="wait 1522s: tokens per day"):
         await llm.invoke_tools("investigate", [HumanMessage("hi")], [])
     assert clock.sleeps == []
+
+
+def test_output_budget_fits_max_tokens_under_the_minute_limit() -> None:
+    assert output_budget(1000, 250_000, 2048) == 2048
+    # 8,000 - 6,000 * 1.1 leaves 1,400 for the answer.
+    assert output_budget(6000, 8000, 2048) == 1400
+    # The reopened summarize_findings that Groq refused: no useful room is left.
+    assert output_budget(7200, 8000, 2048) is None
+
+
+async def test_max_tokens_is_fitted_to_each_request() -> None:
+    chats: list[FakeChat] = []
+    llm = groq_llm(FakeRunnable([reply()]), FakeClock(), chats=chats)
+
+    await llm.invoke_tools("investigate", [HumanMessage("x" * 400)], [])
+    await llm.invoke_tools("investigate", [HumanMessage("x" * 24_000)], [])
+
+    assert chats[0].max_tokens == [2048, 1400]
+
+
+async def test_request_without_room_for_an_answer_is_refused_before_sending() -> None:
+    runnable = FakeRunnable([reply()])
+    llm = groq_llm(runnable, FakeClock())
+
+    with pytest.raises(LLMError, match="leaves no room for an answer"):
+        await llm.invoke_structured("summarize_findings", [HumanMessage("x" * 28_800)], Answer)
+    assert runnable.calls == 0
+
+
+async def test_413_request_too_large_is_a_plain_llm_error() -> None:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(413, request=request)
+    message = "Request too large ... (TPM): Limit 8000, Requested 9250"
+    body = {"error": {"code": "rate_limit_exceeded", "message": message, "failed_generation": "S"}}
+    too_large = groq.APIStatusError("too large", response=response, body=body)
+    llm = groq_llm(FakeRunnable([too_large]), FakeClock())
+
+    with pytest.raises(LLMError, match=r"request too large: .*Requested 9250") as raised:
+        await llm.invoke_structured("summarize_findings", [HumanMessage("x")], Answer)
+    assert raised.value.__cause__ is None
