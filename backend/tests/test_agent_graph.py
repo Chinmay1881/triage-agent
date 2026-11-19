@@ -19,7 +19,9 @@ from app.agent.agents.investigator import BUDGET_EXHAUSTED, build_findings, cove
 from app.agent.agents.reviewer import (
     NOT_LISTED,
     NOT_VERIFIED,
+    TARGET_CHARS,
     apply_verdict,
+    command_for_claim,
     event_target,
     evidence_by_finding,
 )
@@ -55,7 +57,7 @@ from app.llm import InvalidToolCallError, LLMError, MockLLM
 from app.ml.injection import InjectionModel
 from app.telemetry.models import Alert
 from app.tools import TOOLS, call_tool, tool_specs
-from app.tools._common import estimate_tokens
+from app.tools._common import CMDLINE_CHARS, cap_text, estimate_tokens
 from scripts.gen.scenario import encode_powershell
 
 TS = datetime(2026, 10, 6, 10, 0, tzinfo=UTC)
@@ -1317,6 +1319,55 @@ def test_event_targets_are_what_the_event_acted_on() -> None:
     assert event_target(base | {"dns": {"query": "bad.example"}}) == "bad.example"
     logon = {"logon_type": "network", "src_ip": "10.0.0.1", "result": "success"}
     assert "a.b" in (event_target(base | {"logon": logon}) or "")
+
+
+# s08's live run: the claim's last two statements sat past the 160-character cap.
+MAINT_SCRIPT = (
+    "$log = 'C:\\ProgramData\\Northbeam\\maint.log'; $cutoff = (Get-Date).AddDays(-14); "
+    "Get-ChildItem $env:TEMP -Recurse | Where-Object { $_.LastWriteTime -lt $cutoff } | "
+    "Remove-Item -Force; Clear-DnsClientCache; "
+    'Add-Content $log "$(Get-Date -Format o) maintenance done"'
+)
+MAINT_CLAIM = (
+    "powershell.exe ran an encoded command that deletes TEMP files older than 14 days, clears "
+    "the DNS client cache and appends a timestamped entry to maint.log"
+)
+
+
+def test_reviewer_sees_the_whole_cited_script_the_claim_is_about() -> None:
+    cmdline = f"powershell -enc {encode_powershell(MAINT_SCRIPT)}"
+    assert TARGET_CHARS < len(MAINT_SCRIPT) <= CMDLINE_CHARS
+    assert "Clear-DnsClientCache" not in event_target(process_doc(TRIGGER, cmdline))  # the defect
+
+    target = event_target(process_doc(TRIGGER, cmdline), MAINT_CLAIM)
+
+    assert target == MAINT_SCRIPT
+
+
+def test_command_without_a_claim_is_cut_as_before() -> None:
+    assert command_for_claim("cmd /c whoami", MAINT_CLAIM) == "cmd /c whoami"
+    assert command_for_claim(MAINT_SCRIPT) == cap_text(MAINT_SCRIPT, TARGET_CHARS)
+    assert command_for_claim(MAINT_SCRIPT, "the") == cap_text(MAINT_SCRIPT, TARGET_CHARS)
+
+
+def test_script_over_the_cap_keeps_the_statements_the_claim_is_about() -> None:
+    filler = "; ".join(f"$v{i} = Get-Item HKLM:\\Software\\Vendor\\Key{i}" for i in range(8))
+    script = f"{filler}; Clear-DnsClientCache; Add-Content $log done"
+    assert len(script) > CMDLINE_CHARS
+
+    shown = command_for_claim(script, "cleared the DNS client cache and wrote to the log")
+
+    assert "Clear-DnsClientCache" in shown and "Add-Content $log" in shown
+    assert shown.index("$v0") < shown.index("Clear-DnsClientCache")  # script order
+    assert len(shown) <= CMDLINE_CHARS and shown.endswith("…")
+
+
+def test_best_matching_statement_over_the_cap_is_shown_capped() -> None:
+    command = "$a = 1; Clear-DnsClientCache " + "-Verbose " * 40
+
+    shown = command_for_claim(command, "cleared the DNS client cache")
+
+    assert shown.startswith("Clear-DnsClientCache") and len(shown) == CMDLINE_CHARS
 
 
 def test_cited_tool_results_appear_with_their_args_and_digest() -> None:

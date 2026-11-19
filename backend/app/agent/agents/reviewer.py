@@ -11,6 +11,7 @@ Findings the reviewer doesn't list: an observation that passed grounding stays r
 """
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -28,13 +29,20 @@ from app.config import INVESTIGATOR, REPORT_AND_REVIEW, REVIEWER
 from app.llm import LLMError
 from app.telemetry.decode import decode_encoded_command
 from app.tools import tool_specs
-from app.tools._common import cap_text, iso
+from app.tools._common import CMDLINE_CHARS, cap_text, iso
 
 log = logging.getLogger(__name__)
 
 # The reviewer's own calls, compact (Groq: ~8,000 tokens/min).
 TRANSCRIPT_TOKENS = 1500
 TARGET_CHARS = 160
+CLAIM_COMMAND_CHARS = CMDLINE_CHARS
+STATEMENT_SEP = "; "
+# Words too common in claims to say which statement of a script a claim is about.
+CLAIM_STOPWORDS = set(
+    "the and for from with that this was were which into ran run runs command encoded decoded "
+    "decodes powershell exe".split()
+)
 HASH_CHARS = 12
 NOT_VERIFIED = "absence claim not re-verified by a reviewer tool call"
 NOT_LISTED = "absence claim not reviewed"
@@ -88,7 +96,7 @@ def apply_verdict(
     return out, review
 
 
-def event_target(doc: dict[str, Any]) -> str | None:
+def event_target(doc: dict[str, Any], claim: str = "") -> str | None:
     """What an event acted on: a path, destination, domain, logon, task or command."""
     if doc.get("file"):
         return doc["file"].get("path")
@@ -108,10 +116,45 @@ def event_target(doc: dict[str, Any]) -> str | None:
     if doc.get("access"):
         return doc["access"].get("target_name")
     cmdline = (doc.get("process") or {}).get("cmdline") or ""
-    return cap_text(decode_encoded_command(cmdline) or cmdline, TARGET_CHARS)
+    return command_for_claim(decode_encoded_command(cmdline) or cmdline, claim)
 
 
-def event_row(doc: dict[str, Any]) -> dict[str, Any]:
+def claim_words(claim: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", claim.lower()) if len(w) >= 3} - CLAIM_STOPWORDS
+
+
+def command_for_claim(command: str, claim: str = "") -> str:
+    """A command line as the reviewer sees it for one claim.
+
+    With no claim (the closure table) it's cut at TARGET_CHARS as before. For a finding's cited
+    event it gets CLAIM_COMMAND_CHARS, the cap the investigator's tools already show: s08's
+    decoded script is 274 characters, its delete, DNS-clear and log-write statements are all in
+    the claim, and at 160 the reviewer couldn't see them and disputed a true finding. Longer
+    than that, statements sharing more words with the claim are kept first, shown in script
+    order, and "…" marks what was left out.
+    """
+    words = claim_words(claim)
+    if not words:
+        return cap_text(command, TARGET_CHARS)
+    if len(command) <= CLAIM_COMMAND_CHARS:
+        return command
+    statements = [s.strip() for s in re.split(r"[;\r\n]+", command) if s.strip()]
+    scores = [sum(w in s.lower() for w in words) for s in statements]
+    budget = CLAIM_COMMAND_CHARS - 1  # room for one "…"
+    chosen: list[int] = []
+    for i in sorted(range(len(statements)), key=lambda i: (-scores[i], i)):
+        cost = len(statements[i]) + (len(STATEMENT_SEP) if chosen else 0)
+        if not chosen and cost > budget:
+            # The best match alone is over the cap: show it rather than lesser matches.
+            return cap_text(statements[i], CLAIM_COMMAND_CHARS)
+        if cost <= budget:
+            chosen.append(i)
+            budget -= cost
+    text = STATEMENT_SEP.join(statements[i] for i in sorted(chosen))
+    return text if len(chosen) == len(statements) else text + "…"
+
+
+def event_row(doc: dict[str, Any], claim: str = "") -> dict[str, Any]:
     """One line of a finding's evidence table: enough to check who did what to what."""
     process = doc.get("process") or {}
     row = {
@@ -120,7 +163,7 @@ def event_row(doc: dict[str, Any]) -> dict[str, Any]:
         "event_type": doc["event_type"],
         "process": process.get("name"),
         "parent": process.get("parent_name"),
-        "target": event_target(doc),
+        "target": event_target(doc, claim),
     }
     if doc["event_type"] == "process_start":
         row["signer"] = process.get("signer")
@@ -143,7 +186,11 @@ def evidence_by_finding(
         out.append(
             {
                 "finding": finding.id,
-                "cited_events": [event_row(docs[e]) for e in finding.event_ids if e in docs],
+                "cited_events": [
+                    event_row(docs[e], finding.shown_claim())
+                    for e in finding.event_ids
+                    if e in docs
+                ],
                 "cited_tool_results": refs,
             }
         )
