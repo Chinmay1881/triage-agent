@@ -4,7 +4,7 @@ Scenarios s01 and s08, seed 42, variant 1.
 
 **Read these numbers with three caveats:**
 
-- **Different models.** The baseline ran on `gpt-oss-120b`. This smoke test ran every agent on `gpt-oss-20b`, a smaller model. The `gpt-oss-120b` acceptance runs are still to come, so this isn't a like-for-like comparison.
+- **Different models.** The baseline ran on `gpt-oss-120b`. This smoke test ran every agent on `gpt-oss-20b`, a smaller model, so this isn't a like-for-like comparison. s08 has since run twice on the chain's default models (see "s08 on the default models"); s01's default-model acceptance run is still to come.
 - **Fixes after the run.** Two reviewer defects found in this smoke test were fixed afterwards (see "Fixed after this run"). A rerun with the fixes hit `gpt-oss-20b`'s daily limit (198,240 of 200,000 tokens) and produced no usable result, so the fixes are checked by mock tests only.
 - **One run each.** Model output varies between runs, so small differences mean little.
 
@@ -138,9 +138,42 @@ Ideas for the next pass, none tested yet:
 1. **False disputes of true findings (s01 F1, F2).** The verdict prompt didn't include the trigger event or intel facts, so the reviewer really had no evidence for them. It now gets the trigger events, the cited events and the intel facts, which adds tokens to every verdict.
 2. **Verified absences marked unverified (s01 F6 and F7, s08 F5).** The reviewer re-ran those tools, but code only accepted a ref the model quoted correctly. Code now also accepts a successful reviewer call to the same tool the claim cites, read from the tool log.
 
+## s08 on the default models
+
+Two CLI runs on 2026-11-19, with the investigator, reviewer and assess on `gpt-oss-120b` and the other nodes on `gpt-oss-20b`. Run A is at `79a3f20`; run B adds the reviewer fix below (`684d981`). Like the smoke runs, these are one run each, and they're the first that can be compared with the 120b baseline.
+
+| | s08 baseline | s08 chain, 20b | Run A, default | Run B, default |
+| --- | --- | --- | --- | --- |
+| Finished | Yes | Yes | Yes (the earlier attempt crashed, see below) | Yes |
+| Verdict | not applicable | not recorded | benign, 0.85, risk 20 | benign, 0.78, risk 20 |
+| Recommendation | not applicable | not applicable | `close_as_benign`, needs approval | `close_as_benign`, needs approval |
+| Findings: confirmed / disputed | 15, not reviewed | 4 / 2 | 7 / 3 | 5 / 3 |
+| False disputes of true findings | not applicable | 0 | **1** (F2) | 0 |
+| Reviewer reopen | not applicable | no | yes | no |
+| LLM-chosen tool calls | 12 of 12 | investigator 5 of 8, reviewer 3 | investigator 7 of 10, reviewer 3 | investigator 5 of 10, reviewer 3 |
+| LLM calls | 18 | 16 | 29 | 25, including 1 rejected |
+| Tokens counted against limits | 57,887 | 51,675 | 96,587 | 83,116 |
+| Of those, on `gpt-oss-120b` | 57,887 | 0 | 85,551 | 75,224 |
+| Of those, investigator + reviewer | 57,887 | 46,905 | 84,119 | 73,722 |
+| Duration | 438 s | 389 s | 592 s | 526 s |
+
+Triage made s08 P2 in both runs (P3 in the 20b smoke test), so the investigator's budget was 10 calls, not 8.
+
+**Earlier attempt, 2026-11-17: crashed.** After a reviewer reopen, `summarize_findings` asked for 9,250 tokens against the 8,000-a-minute limit and Groq answered 413. Fixed in `79a3f20`: each request's `max_tokens` is fitted under the limit, and a 413 becomes an `LLMError` the node degrades on. In run A the reopened `summarize_findings` (7,009 input tokens) went through.
+
+**Run A: one false dispute (F2).** F2 said the decoded command deletes temp files older than 14 days, clears the DNS client cache and appends to `maint.log`. All true, but the reviewer saw a finding's cited events cut at 160 characters, and the decoded script is 274: `Clear-DnsClientCache` starts at character 189 and `Add-Content` at 210. Keeping the claim's statements first within 160 characters, at no extra token cost, couldn't fit all three statements; the delete pipeline alone is about 158. Fixed in `684d981`: a finding's cited process events show up to 300 characters, the cap the investigator's tools already use, with the claim's statements first beyond that. That costs about 30 tokens per cited command over 160 characters. Run A's other two disputes (F6, F10) were absence claims the reviewer didn't re-verify, disputed by rule.
+
+**Run B: no false disputes.** All 3 disputes were justified: F5 claimed no outbound connections except RDP, and the reviewer found OneDrive traffic in the window; F4 and F6 were unverified absence claims. Caveat: run B's investigator didn't write a "the decoded script does X" finding, so the exact case the fix is for didn't come up live. The unit tests cover it, and against the real `evt_008227` the reviewer now sees the whole script.
+
+**Run B: one rejected call.** One `investigate` call came back 400: Groq rejected `gpt-oss-120b`'s malformed tool-call JSON, as it did CyberIntel-Agent's on the 20b smoke run. The node treated it as a failed turn and the run carried on.
+
+**Tokens.** The investigator and reviewer used 84,119 (run A, with a reopen) and 73,722 (run B, without), against the 45,000 target. Most of it is `investigate`, whose input grows each turn: 43,432 of run B's tokens over 11 calls. One run is about 40% of `gpt-oss-120b`'s free daily 200,000, so the free tier fits two default runs a day.
+
 ## Still open
 
 - **Grounding can't check attribution.** F11 names real entities and cites a real tool result, so it passes, though its claim about who wrote the file is false. The reviewer confirmed it, which suggests tool-ref citations are weaker than event citations.
 - **`summarize_findings` still keeps trivia on `gpt-oss-20b`** (F9, F10), despite the prompt.
 - **`first_checks` nudge:** it fired on s08 and on both baseline runs, pushing up tool use.
+- **Default-model runs are about twice the token target** (see "s08 on the default models"), so the 48-run eval batch needs the paid tier.
+- **Wording can still beat the reviewer.** A broad claim ("no outbound connections except RDP") is rightly disputed even when its core (no connections from PowerShell) is true. Splitting such claims in `summarize_findings` would keep the true part.
 - **A failed `plan` call ends the run with an error.** That's how the rerun's s08 ended when the daily limit hit; every other agent degrades instead.
