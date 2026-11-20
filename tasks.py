@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
+FRONTEND = ROOT / "frontend"
 MODELS = ROOT / "data" / "models"
 ARTIFACTS = ("anomaly.joblib", "injection.joblib")
 # Scripts run in the backend's environment (they share its models and pymongo).
@@ -72,12 +73,17 @@ def lint(args: argparse.Namespace) -> int:
 
 def dev_api(args: argparse.Namespace) -> int:
     uvicorn = ["uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", "8000"]
-    return run(["uv", "run", *uvicorn], cwd=BACKEND)
+    # An environment variable beats .env, so --mock can't reach Groq whatever .env says.
+    env = {**os.environ, "LLM_MODE": "mock"} if args.mock else None
+    return run(["uv", "run", *uvicorn], cwd=BACKEND, env=env)
 
 
 def dev_web(args: argparse.Namespace) -> int:
-    print("dev-web: not implemented yet (Phase 6)", file=sys.stderr)
-    return 1
+    if not (FRONTEND / "node_modules").exists():
+        installed = run(["npm", "install"], cwd=FRONTEND)
+        if installed != 0:
+            return installed
+    return run(["npm", "run", "dev"], cwd=FRONTEND)
 
 
 TASKS: dict[str, tuple[Callable[[argparse.Namespace], int], str]] = {
@@ -88,7 +94,7 @@ TASKS: dict[str, tuple[Callable[[argparse.Namespace], int], str]] = {
     "test": (test, "run backend tests with LLM_MODE=mock (extra args go to pytest)"),
     "lint": (lint, "ruff check + format check"),
     "dev-api": (dev_api, "FastAPI with reload on http://127.0.0.1:8000"),
-    "dev-web": (dev_web, "Next.js on http://localhost:3000 (Phase 6)"),
+    "dev-web": (dev_web, "Next.js on http://localhost:3000"),
 }
 
 
@@ -99,6 +105,8 @@ def main() -> int:
         p = sub.add_parser(name, help=help_text)
         if name == "down":
             p.add_argument("--volumes", action="store_true")
+        if name == "dev-api":
+            p.add_argument("--mock", action="store_true", help="scripted model; no Groq calls")
     # parse_known_args so `test -k health -v` reaches pytest; argparse.REMAINDER drops
     # arguments that start with "-".
     args, extra = parser.parse_known_args()

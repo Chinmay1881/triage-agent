@@ -1,0 +1,2031 @@
+{
+  "description": "four-agent chain, smoke_20b",
+  "date": "2026-11-06",
+  "code_commit": "ae91d07+uncommitted",
+  "models": {
+    "Sentinel-Triage": "openai/gpt-oss-20b",
+    "CyberIntel-Agent": "openai/gpt-oss-20b",
+    "Investigator-Agent": "openai/gpt-oss-20b",
+    "Reviewer-Agent": "openai/gpt-oss-20b"
+  },
+  "reasoning_effort": {
+    "triage": "low",
+    "intel": "low",
+    "intel_brief": "low",
+    "plan": "low",
+    "investigate": "medium",
+    "summarize_findings": "low",
+    "review": "medium",
+    "review_verdict": "medium"
+  },
+  "tool_schema_tokens_per_call": {
+    "before_all_12": 1844,
+    "investigator_and_reviewer": 1289,
+    "cyberintel": 745
+  },
+  "runs": [
+    {
+      "scenario": "s01",
+      "alert_id": "alt_0001",
+      "stop_reason": "agent_done",
+      "timed_out": false,
+      "duration_s": 497.7,
+      "handoffs": [
+        {
+          "from_agent": "alert",
+          "to_agent": "Sentinel-Triage",
+          "ts": "2026-11-06 03:56:52.544639+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Sentinel-Triage",
+          "to_agent": "CyberIntel-Agent",
+          "ts": "2026-11-06 03:56:52.544639+00:00",
+          "note": "P2 endpoint"
+        },
+        {
+          "from_agent": "CyberIntel-Agent",
+          "to_agent": "Investigator-Agent",
+          "ts": "2026-11-06 03:56:54.423891+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Investigator-Agent",
+          "to_agent": "Reviewer-Agent",
+          "ts": "2026-11-06 03:59:52.171996+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Reviewer-Agent",
+          "to_agent": "Investigator-Agent",
+          "ts": "2026-11-06 04:02:15.264510+00:00",
+          "note": "reopen"
+        },
+        {
+          "from_agent": "Investigator-Agent",
+          "to_agent": "Reviewer-Agent",
+          "ts": "2026-11-06 04:04:02.004532+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Reviewer-Agent",
+          "to_agent": "report",
+          "ts": "2026-11-06 04:05:07.567128+00:00",
+          "note": ""
+        }
+      ],
+      "triage": {
+        "priority": "P2",
+        "category": "endpoint",
+        "reason": "Word spawned PowerShell with an encoded command that downloads a binary, indicating likely malicious activity.",
+        "anomaly": [
+          {
+            "event_id": "evt_004047",
+            "score": 0.684,
+            "percentile": 100.0,
+            "stood_out": [
+              "parent_child_count_fleet",
+              "encoded",
+              "cmdline_length"
+            ]
+          }
+        ]
+      },
+      "investigator_budget": 10,
+      "budget_reason": "P2 from Sentinel-Triage: 10 tool calls",
+      "tool_calls_used": 7,
+      "review_calls_used": 2,
+      "intel_brief": {
+        "process_chain": [
+          {
+            "role": "parent",
+            "event_id": "evt_004043",
+            "name": "WINWORD.EXE",
+            "user": "ben.r",
+            "signer": "Microsoft Corporation",
+            "sha256": "10690ecba328f4a4147dea539d9e4c9f28a8da25b8475bbd0c86e8b535673c06",
+            "cmdline": "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE\" /n \"C:\\Users\\ben.r\\AppData\\Local\\Microsoft\\Windows\\INetCache\\Content.Outlook\\8PWQQ55H\\R…",
+            "reputation": "known_good"
+          },
+          {
+            "role": "trigger",
+            "event_id": "evt_004047",
+            "name": "powershell.exe",
+            "user": "ben.r",
+            "signer": "Microsoft Windows",
+            "sha256": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+            "reputation": "known_good"
+          },
+          {
+            "role": "child",
+            "event_id": "evt_004052",
+            "name": "msupdate.exe",
+            "user": "ben.r",
+            "signer": null,
+            "sha256": "acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047",
+            "cmdline": "\"C:\\Users\\ben.r\\AppData\\Roaming\\Microsoft\\msupdate.exe\"",
+            "reputation": "known_bad"
+          }
+        ],
+        "reputation": [
+          {
+            "indicator": "invoice-portal.example",
+            "type": "domain",
+            "reputation": "known_bad",
+            "description": "Malware distribution domain (phishing kit)",
+            "ref": "tool:check_reputation#3"
+          },
+          {
+            "indicator": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+            "type": "hash",
+            "reputation": "known_good",
+            "description": "Signed system or vendor binary (powershell.exe)",
+            "ref": "tool:check_reputation#4"
+          },
+          {
+            "indicator": "10690ecba328f4a4147dea539d9e4c9f28a8da25b8475bbd0c86e8b535673c06",
+            "type": "hash",
+            "reputation": "known_good",
+            "description": "Signed system or vendor binary (WINWORD.EXE)",
+            "ref": "tool:check_reputation#5"
+          },
+          {
+            "indicator": "acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047",
+            "type": "hash",
+            "reputation": "known_bad",
+            "description": "Commodity loader",
+            "ref": "tool:check_reputation#6"
+          }
+        ],
+        "hosts": [
+          {
+            "hostname": "FIN-WS-02",
+            "role": "workstation",
+            "department": "Finance",
+            "owner": "ben.r",
+            "criticality": 3,
+            "ref": "tool:get_host_info#7"
+          }
+        ],
+        "users": [
+          {
+            "username": "ben.r",
+            "title": "Accountant",
+            "department": "Finance",
+            "is_admin": false,
+            "is_service_account": false,
+            "usual_countries": [
+              "GB"
+            ],
+            "ref": "tool:get_user_info#8"
+          }
+        ],
+        "anomaly": [
+          {
+            "event_id": "evt_004047",
+            "score": 0.684,
+            "percentile": 100.0,
+            "stood_out": [
+              "parent_child_count_fleet",
+              "encoded",
+              "cmdline_length"
+            ],
+            "ref": "tool:score_anomaly#9"
+          },
+          {
+            "event_id": "evt_004043",
+            "score": 0.653,
+            "percentile": 99.0,
+            "stood_out": [
+              "cmdline_entropy",
+              "cmdline_length",
+              "temp_path"
+            ],
+            "ref": "tool:score_anomaly#9"
+          },
+          {
+            "event_id": "evt_004052",
+            "score": 0.698,
+            "percentile": 100.0,
+            "stood_out": [
+              "parent_child_count_fleet",
+              "unsigned",
+              "parent_child_count_host"
+            ],
+            "ref": "tool:score_anomaly#9"
+          }
+        ],
+        "assessment": "The alert shows a legitimate Office process (WINWORD.EXE) launching PowerShell with an encoded command that downloads and runs a binary from a known‑bad domain; the child msupdate.exe is unsigned and flagged as a commodity loader, strongly suggesting malicious activity rather than a benign update. H",
+        "notable": [
+          "Investigate the download URL http://invoice-portal.example/dl/update.bin for malicious payloads or phishing content.",
+          "Examine the msupdate.exe binary (sha256 acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047) for known malware signatures or persistence mechanisms.",
+          "Check the user ben.r’s recent activity for signs of credential compromise or suspicious macro usage in Word documents.",
+          "Verify whether the encoded PowerShell command is part of a known legitimate Office feature or a custom macro script.",
+          "Correlate with other hosts in the Finance department for similar encoded PowerShell executions or downloads from the same domain."
+        ]
+      },
+      "tool_logs": {
+        "Sentinel-Triage": [
+          {
+            "ref": "tool:score_anomaly#1",
+            "agent": "Sentinel-Triage",
+            "name": "score_anomaly",
+            "args": {
+              "event_ids": [
+                "evt_004047"
+              ]
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 1,
+            "source": "code",
+            "defaulted_window": false
+          }
+        ],
+        "CyberIntel-Agent": [
+          {
+            "ref": "tool:get_process_tree#2",
+            "agent": "CyberIntel-Agent",
+            "name": "get_process_tree",
+            "args": {
+              "event_id": "evt_004047"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 6,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#3",
+            "agent": "CyberIntel-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "invoice-portal.example",
+              "type": "domain"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#4",
+            "agent": "CyberIntel-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#5",
+            "agent": "CyberIntel-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "10690ecba328f4a4147dea539d9e4c9f28a8da25b8475bbd0c86e8b535673c06",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#6",
+            "agent": "CyberIntel-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_host_info#7",
+            "agent": "CyberIntel-Agent",
+            "name": "get_host_info",
+            "args": {
+              "host": "FIN-WS-02"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_user_info#8",
+            "agent": "CyberIntel-Agent",
+            "name": "get_user_info",
+            "args": {
+              "user": "ben.r"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:score_anomaly#9",
+            "agent": "CyberIntel-Agent",
+            "name": "score_anomaly",
+            "args": {
+              "event_ids": [
+                "evt_004047",
+                "evt_004043",
+                "evt_004052"
+              ]
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 3,
+            "source": "code",
+            "defaulted_window": false
+          }
+        ],
+        "Investigator-Agent": [
+          {
+            "ref": "tool:get_dns_queries#10",
+            "agent": "Investigator-Agent",
+            "name": "get_dns_queries",
+            "args": {
+              "around": "2026-10-06T09:55:12Z",
+              "end": "2026-10-06T10:05:00Z",
+              "host": "FIN-WS-02",
+              "start": "2026-10-06T09:50:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 2,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#11",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "203.0.113.116",
+              "type": "ip"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#12",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "52.31.84.203",
+              "type": "ip"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#13",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "go.xero.com",
+              "type": "domain"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_logon_history#14",
+            "agent": "Investigator-Agent",
+            "name": "get_logon_history",
+            "args": {
+              "around": "2026-10-06T09:55:12Z",
+              "end": "2026-10-06T10:05:00Z",
+              "host": "FIN-WS-02",
+              "start": "2026-10-06T09:50:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_network_connections#15",
+            "agent": "Investigator-Agent",
+            "name": "get_network_connections",
+            "args": {
+              "around": "2026-10-06T09:55:12Z",
+              "end": "2026-10-06T10:05:00Z",
+              "host": "FIN-WS-02",
+              "start": "2026-10-06T09:50:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 5,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#16",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "13.107.138.10",
+              "type": "ip"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_persistence_events#17",
+            "agent": "Investigator-Agent",
+            "name": "get_persistence_events",
+            "args": {
+              "around": "2026-10-06T09:55:12Z",
+              "end": "2026-10-06T10:05:00Z",
+              "host": "FIN-WS-02",
+              "start": "2026-10-06T09:50:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:search_process_events#18",
+            "agent": "Investigator-Agent",
+            "name": "search_process_events",
+            "args": {
+              "end": "2026-10-06T10:05:00Z",
+              "host": "FIN-WS-02",
+              "name": "msupdate.exe",
+              "start": "2026-10-06T09:50:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 1,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_process_tree#21",
+            "agent": "Investigator-Agent",
+            "name": "get_process_tree",
+            "args": {
+              "event_id": "evt_004047"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 6,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#22",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "0df970167811731e8b4dde8a4ffb196a957d9b4f77304730719b0ca0df0427be",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#23",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "f0e2d19fa545b91aa9ef55ddebc9eb674a96603ad1c7057b67a7d2d3a2056748",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:score_anomaly#24",
+            "agent": "Investigator-Agent",
+            "name": "score_anomaly",
+            "args": {
+              "event_ids": [
+                "evt_004047",
+                "evt_004043",
+                "evt_004052"
+              ]
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 3,
+            "source": "llm",
+            "defaulted_window": false
+          }
+        ],
+        "Reviewer-Agent": [
+          {
+            "ref": "tool:get_persistence_events#19",
+            "agent": "Reviewer-Agent",
+            "name": "get_persistence_events",
+            "args": {
+              "end": "2026-10-06T11:00:00Z",
+              "host": "FIN-WS-02",
+              "start": "2026-10-06T09:00:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_logon_history#20",
+            "agent": "Reviewer-Agent",
+            "name": "get_logon_history",
+            "args": {
+              "around": "2026-10-06T10:00:00Z",
+              "end": "2026-10-06T10:30:00Z",
+              "host": "FIN-WS-02",
+              "start": "2026-10-06T09:00:00Z",
+              "user": "ben.r"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          }
+        ]
+      },
+      "coverage_nudges": [],
+      "reopened": 1,
+      "findings": [
+        {
+          "id": "F1",
+          "claim": "WINWORD.EXE (pid 16788) spawned powershell.exe (pid 9396) with an encoded command line that downloads a file from http://invoice-portal.example/dl/update.bin",
+          "kind": "observation",
+          "citations": [
+            "evt_004047"
+          ],
+          "status": "disputed",
+          "dispute_reason": "No evidence of WINWORD.exe spawning powershell.exe is present in the provided logs.",
+          "withheld_by": []
+        },
+        {
+          "id": "F2",
+          "claim": "The encoded PowerShell command decoded to download the file to $env:APPDATA\\Microsoft\\msupdate.exe and then executed it",
+          "kind": "observation",
+          "citations": [
+            "evt_004047"
+          ],
+          "status": "disputed",
+          "dispute_reason": "No evidence of the encoded PowerShell command or its decoded download path is available.",
+          "withheld_by": []
+        },
+        {
+          "id": "F3",
+          "claim": "msupdate.exe (pid 24756) was launched by powershell.exe and is unsigned with a known‑bad hash acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047",
+          "kind": "observation",
+          "citations": [
+            "evt_004052",
+            "tool:check_reputation#6"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F4",
+          "claim": "Network connection from powershell.exe to 203.0.113.116 (invoice-portal.example) on port 80 occurred at 09:55:12Z",
+          "kind": "observation",
+          "citations": [
+            "evt_004049",
+            "tool:get_network_connections#15"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F5",
+          "claim": "Network connection from msupdate.exe to 203.0.113.116 on port 443 occurred twice between 09:55:31Z and 10:01:10Z",
+          "kind": "observation",
+          "citations": [
+            "evt_004054",
+            "evt_004087",
+            "tool:get_network_connections#15"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F6",
+          "claim": "No persistence events were recorded for FIN-WS-02 during the investigation window",
+          "kind": "absence",
+          "citations": [
+            "tool:get_persistence_events#17"
+          ],
+          "status": "disputed",
+          "dispute_reason": "absence claim not re-verified by a reviewer tool call",
+          "withheld_by": []
+        },
+        {
+          "id": "F7",
+          "claim": "No logon events for user ben.r were observed between 09:50:00Z and 10:05:00Z",
+          "kind": "absence",
+          "citations": [
+            "tool:get_logon_history#14"
+          ],
+          "status": "disputed",
+          "dispute_reason": "absence claim not re-verified by a reviewer tool call",
+          "withheld_by": []
+        },
+        {
+          "id": "F8",
+          "claim": "No other processes on FIN-WS-02 executed the same encoded PowerShell command or downloaded from invoice-portal.example",
+          "kind": "absence",
+          "citations": [
+            "tool:search_process_events#18"
+          ],
+          "status": "disputed",
+          "dispute_reason": "absence claim not re-verified by a reviewer tool call",
+          "withheld_by": []
+        },
+        {
+          "id": "F9",
+          "claim": "A DNS query for go.xero.com was resolved to IP 52.31.84.203 by the host FIN-WS-02 at 2026-10-06T10:01:25Z.",
+          "kind": "observation",
+          "citations": [
+            "tool:get_dns_queries#10"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F10",
+          "claim": "The host FIN-WS-02 established a network connection from OneDrive.exe (pid 7008) to IP 13.107.138.10 on port 443 at 2026-10-06T09:51:47Z.",
+          "kind": "observation",
+          "citations": [
+            "tool:get_network_connections#15"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F11",
+          "claim": "The file C:\\Users\\ben.r\\AppData\\Roaming\\Microsoft\\msupdate.exe was created by msupdate.exe (pid 24756) with a size of 289,616 bytes and SHA256 acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047.",
+          "kind": "observation",
+          "citations": [
+            "tool:get_process_tree#21"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        }
+      ],
+      "reportable_findings": [
+        "F3",
+        "F4",
+        "F5",
+        "F9",
+        "F10",
+        "F11"
+      ],
+      "findings_dropped": 0,
+      "citations_removed": 0,
+      "review": {
+        "confirmed": [
+          "F3",
+          "F4",
+          "F5",
+          "F9",
+          "F10",
+          "F11"
+        ],
+        "disputed": [
+          {
+            "finding": "F1",
+            "reason": "No evidence of WINWORD.exe spawning powershell.exe is present in the provided logs."
+          },
+          {
+            "finding": "F2",
+            "reason": "No evidence of the encoded PowerShell command or its decoded download path is available."
+          },
+          {
+            "finding": "F6",
+            "reason": "absence claim not re-verified by a reviewer tool call"
+          },
+          {
+            "finding": "F7",
+            "reason": "absence claim not re-verified by a reviewer tool call"
+          },
+          {
+            "finding": "F8",
+            "reason": "absence claim not re-verified by a reviewer tool call"
+          }
+        ],
+        "unreviewed": [],
+        "reopen_requested": true,
+        "reason": "All findings are supported by the evidence provided.",
+        "passes": 2
+      },
+      "injection_flags": [],
+      "tokens": {
+        "llm_calls": 21,
+        "rejected_calls": 1,
+        "input_tokens": 72036,
+        "cached_tokens": 7424,
+        "output_tokens": 8601,
+        "total_tokens": 80637,
+        "billed_tokens": 73213
+      },
+      "tokens_per_agent": {
+        "Sentinel-Triage": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 843,
+          "cached_tokens": 0,
+          "output_tokens": 82,
+          "billed_tokens": 925
+        },
+        "CyberIntel-Agent": {
+          "calls": 2,
+          "rejected_calls": 1,
+          "input_tokens": 3386,
+          "cached_tokens": 0,
+          "output_tokens": 269,
+          "billed_tokens": 3655
+        },
+        "Investigator-Agent": {
+          "calls": 12,
+          "rejected_calls": 0,
+          "input_tokens": 51552,
+          "cached_tokens": 7424,
+          "output_tokens": 2451,
+          "billed_tokens": 46579
+        },
+        "Reviewer-Agent": {
+          "calls": 6,
+          "rejected_calls": 0,
+          "input_tokens": 16255,
+          "cached_tokens": 0,
+          "output_tokens": 5799,
+          "billed_tokens": 22054
+        }
+      },
+      "tokens_per_node": {
+        "triage": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 843,
+          "cached_tokens": 0,
+          "output_tokens": 82,
+          "billed_tokens": 925,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "intel": {
+          "calls": 1,
+          "rejected_calls": 1,
+          "input_tokens": 1846,
+          "cached_tokens": 0,
+          "output_tokens": 0,
+          "billed_tokens": 1846,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "intel_brief": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 1540,
+          "cached_tokens": 0,
+          "output_tokens": 269,
+          "billed_tokens": 1809,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "plan": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 1846,
+          "cached_tokens": 0,
+          "output_tokens": 168,
+          "billed_tokens": 2014,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "investigate": {
+          "calls": 9,
+          "rejected_calls": 0,
+          "input_tokens": 40064,
+          "cached_tokens": 7424,
+          "output_tokens": 1274,
+          "billed_tokens": 33914,
+          "effort": "medium",
+          "model": "openai/gpt-oss-20b"
+        },
+        "summarize_findings": {
+          "calls": 2,
+          "rejected_calls": 0,
+          "input_tokens": 9642,
+          "cached_tokens": 0,
+          "output_tokens": 1009,
+          "billed_tokens": 10651,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "review": {
+          "calls": 4,
+          "rejected_calls": 0,
+          "input_tokens": 10023,
+          "cached_tokens": 0,
+          "output_tokens": 3322,
+          "billed_tokens": 13345,
+          "effort": "medium",
+          "model": "openai/gpt-oss-20b"
+        },
+        "review_verdict": {
+          "calls": 2,
+          "rejected_calls": 0,
+          "input_tokens": 6232,
+          "cached_tokens": 0,
+          "output_tokens": 2477,
+          "billed_tokens": 8709,
+          "effort": "medium",
+          "model": "openai/gpt-oss-20b"
+        }
+      },
+      "tokens_per_model": {
+        "openai/gpt-oss-20b": {
+          "calls": 21,
+          "rejected_calls": 1,
+          "input_tokens": 72036,
+          "cached_tokens": 7424,
+          "output_tokens": 8601,
+          "billed_tokens": 73213
+        }
+      },
+      "llm_calls": [
+        {
+          "node": "triage",
+          "input_tokens": 843,
+          "output_tokens": 82,
+          "seconds": 0.9210000000020955,
+          "retries": 0,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Sentinel-Triage"
+        },
+        {
+          "node": "intel",
+          "input_tokens": 1846,
+          "output_tokens": 0,
+          "seconds": 0.6869999999980791,
+          "retries": 0,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": true,
+          "agent": "CyberIntel-Agent"
+        },
+        {
+          "node": "intel_brief",
+          "input_tokens": 1540,
+          "output_tokens": 269,
+          "seconds": 0.9060000000026776,
+          "retries": 0,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "CyberIntel-Agent"
+        },
+        {
+          "node": "plan",
+          "input_tokens": 1846,
+          "output_tokens": 168,
+          "seconds": 0.7340000000040163,
+          "retries": 0,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3355,
+          "output_tokens": 132,
+          "seconds": 0.8439999999973224,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3723,
+          "output_tokens": 109,
+          "seconds": 0.5619999999980791,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3840,
+          "output_tokens": 110,
+          "seconds": 0.8910000000032596,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4283,
+          "output_tokens": 164,
+          "seconds": 0.7809999999954016,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4410,
+          "output_tokens": 104,
+          "seconds": 0.7809999999954016,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4336,
+          "output_tokens": 303,
+          "seconds": 1.062000000005355,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "summarize_findings",
+          "input_tokens": 3796,
+          "output_tokens": 475,
+          "seconds": 1.3119999999980791,
+          "retries": 1,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2466,
+          "output_tokens": 638,
+          "seconds": 1.125,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2560,
+          "output_tokens": 505,
+          "seconds": 1.0939999999973224,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2685,
+          "output_tokens": 2048,
+          "seconds": 3.235000000000582,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review_verdict",
+          "input_tokens": 2811,
+          "output_tokens": 1399,
+          "seconds": 2.2189999999973224,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4498,
+          "output_tokens": 100,
+          "seconds": 3.3439999999973224,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 3328,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 5673,
+          "output_tokens": 91,
+          "seconds": 0.8590000000040163,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 5946,
+          "output_tokens": 161,
+          "seconds": 0.8600000000005821,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 4096,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "summarize_findings",
+          "input_tokens": 5846,
+          "output_tokens": 534,
+          "seconds": 1.2810000000026776,
+          "retries": 3,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2312,
+          "output_tokens": 131,
+          "seconds": 0.8910000000032596,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review_verdict",
+          "input_tokens": 3421,
+          "output_tokens": 1078,
+          "seconds": 2.4839999999967404,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        }
+      ]
+    },
+    {
+      "scenario": "s08",
+      "alert_id": "alt_0006",
+      "stop_reason": "agent_done",
+      "timed_out": false,
+      "duration_s": 389.2,
+      "handoffs": [
+        {
+          "from_agent": "alert",
+          "to_agent": "Sentinel-Triage",
+          "ts": "2026-11-06 04:05:19.909742+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Sentinel-Triage",
+          "to_agent": "CyberIntel-Agent",
+          "ts": "2026-11-06 04:05:19.909742+00:00",
+          "note": "P3 endpoint"
+        },
+        {
+          "from_agent": "CyberIntel-Agent",
+          "to_agent": "Investigator-Agent",
+          "ts": "2026-11-06 04:05:43.199824+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Investigator-Agent",
+          "to_agent": "Reviewer-Agent",
+          "ts": "2026-11-06 04:09:28.497538+00:00",
+          "note": ""
+        },
+        {
+          "from_agent": "Reviewer-Agent",
+          "to_agent": "report",
+          "ts": "2026-11-06 04:11:36.830822+00:00",
+          "note": ""
+        }
+      ],
+      "triage": {
+        "priority": "P3",
+        "category": "endpoint",
+        "reason": "Encoded PowerShell command performs routine maintenance (temp cleanup, DNS cache clear) and logs activity; while encoded cmdline is unusual, the decoded action is benign and routine.",
+        "anomaly": [
+          {
+            "event_id": "evt_008227",
+            "score": 0.684,
+            "percentile": 100.0,
+            "stood_out": [
+              "parent_child_count_fleet",
+              "encoded",
+              "cmdline_length"
+            ]
+          }
+        ]
+      },
+      "investigator_budget": 8,
+      "budget_reason": "P3 from Sentinel-Triage: 8 tool calls",
+      "tool_calls_used": 5,
+      "review_calls_used": 3,
+      "intel_brief": {
+        "process_chain": [
+          {
+            "role": "parent",
+            "event_id": "evt_008225",
+            "name": "AdminToolkit.exe",
+            "user": "felix.w",
+            "signer": "Northbeam Software Ltd",
+            "sha256": "fd59c2d5dc2cb8381f2d78cc3007dd231a951696f50a64ae3a6f2eec38cbaf6d",
+            "cmdline": "\"C:\\Program Files\\Northbeam\\AdminToolkit\\AdminToolkit.exe\" /task \"Weekly workstation maintenance\"",
+            "reputation": "known_good"
+          },
+          {
+            "role": "trigger",
+            "event_id": "evt_008227",
+            "name": "powershell.exe",
+            "user": "felix.w",
+            "signer": "Microsoft Windows",
+            "sha256": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+            "reputation": "known_good"
+          }
+        ],
+        "reputation": [
+          {
+            "indicator": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+            "type": "hash",
+            "reputation": "known_good",
+            "description": "Signed system or vendor binary (powershell.exe)",
+            "ref": "tool:check_reputation#3"
+          },
+          {
+            "indicator": "fd59c2d5dc2cb8381f2d78cc3007dd231a951696f50a64ae3a6f2eec38cbaf6d",
+            "type": "hash",
+            "reputation": "known_good",
+            "description": "Signed system or vendor binary (AdminToolkit.exe)",
+            "ref": "tool:check_reputation#4"
+          }
+        ],
+        "hosts": [
+          {
+            "hostname": "IT-WS-01",
+            "role": "workstation",
+            "department": "IT",
+            "owner": "felix.w",
+            "criticality": 3,
+            "ref": "tool:get_host_info#5"
+          }
+        ],
+        "users": [
+          {
+            "username": "felix.w",
+            "title": "Infrastructure Lead",
+            "department": "IT",
+            "is_admin": true,
+            "is_service_account": false,
+            "usual_countries": [
+              "GB"
+            ],
+            "ref": "tool:get_user_info#6"
+          }
+        ],
+        "anomaly": [
+          {
+            "event_id": "evt_008227",
+            "score": 0.684,
+            "percentile": 100.0,
+            "stood_out": [
+              "parent_child_count_fleet",
+              "encoded",
+              "cmdline_length"
+            ],
+            "ref": "tool:score_anomaly#7"
+          },
+          {
+            "event_id": "evt_008225",
+            "score": 0.664,
+            "percentile": 99.5,
+            "stood_out": [
+              "parent_child_count_fleet",
+              "parent_child_count_host",
+              "hour"
+            ],
+            "ref": "tool:score_anomaly#7"
+          }
+        ],
+        "assessment": "The alert shows a legitimate, scheduled maintenance task launched by a known-good AdminToolkit.exe that uses an encoded PowerShell command to clean temp files and log activity; the encoded command, high anomaly score, and parent-child count are typical for scripted maintenance, supporting a harmless",
+        "notable": [
+          "Verify the integrity and source of AdminToolkit.exe and its task configuration to ensure it has not been tampered with.",
+          "Check the scheduled task or automation that triggers the encoded PowerShell command for any unauthorized modifications.",
+          "Confirm that the PowerShell script does not perform any actions beyond the documented temp cleanup and DNS cache clearing.",
+          "Inspect the host IT-WS-01 for any other anomalous processes or network activity around the same timestamp.",
+          "Review the user felix.w’s recent activity and access patterns to rule out credential compromise."
+        ]
+      },
+      "tool_logs": {
+        "Sentinel-Triage": [
+          {
+            "ref": "tool:score_anomaly#1",
+            "agent": "Sentinel-Triage",
+            "name": "score_anomaly",
+            "args": {
+              "event_ids": [
+                "evt_008227"
+              ]
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 1,
+            "source": "code",
+            "defaulted_window": false
+          }
+        ],
+        "CyberIntel-Agent": [
+          {
+            "ref": "tool:get_process_tree#2",
+            "agent": "CyberIntel-Agent",
+            "name": "get_process_tree",
+            "args": {
+              "event_id": "evt_008227"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 5,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#3",
+            "agent": "CyberIntel-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#4",
+            "agent": "CyberIntel-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "fd59c2d5dc2cb8381f2d78cc3007dd231a951696f50a64ae3a6f2eec38cbaf6d",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_host_info#5",
+            "agent": "CyberIntel-Agent",
+            "name": "get_host_info",
+            "args": {
+              "host": "IT-WS-01"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_user_info#6",
+            "agent": "CyberIntel-Agent",
+            "name": "get_user_info",
+            "args": {
+              "user": "felix.w"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "code",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:score_anomaly#7",
+            "agent": "CyberIntel-Agent",
+            "name": "score_anomaly",
+            "args": {
+              "event_ids": [
+                "evt_008227",
+                "evt_008225"
+              ]
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 2,
+            "source": "code",
+            "defaulted_window": false
+          }
+        ],
+        "Investigator-Agent": [
+          {
+            "ref": "tool:get_process_tree#8",
+            "agent": "Investigator-Agent",
+            "name": "get_process_tree",
+            "args": {
+              "event_id": "evt_008227"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 5,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#9",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "f0e2d19fa545b91aa9ef55ddebc9eb674a96603ad1c7057b67a7d2d3a2056748",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#10",
+            "agent": "Investigator-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "213800d38fea9c41ce9100b20536dec9b4e928709ff5deeab68d6f0b395e6271",
+              "type": "hash"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_network_connections#11",
+            "agent": "Investigator-Agent",
+            "name": "get_network_connections",
+            "args": {
+              "around": "2026-10-07T13:25:00Z",
+              "end": "2026-10-07T13:30:00Z",
+              "host": "IT-WS-01",
+              "start": "2026-10-07T13:20:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 1,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_persistence_events#12",
+            "agent": "Investigator-Agent",
+            "name": "get_persistence_events",
+            "args": {
+              "around": "2026-10-07T13:25:00Z",
+              "end": "2026-10-07T13:30:00Z",
+              "host": "IT-WS-01",
+              "start": "2026-10-07T13:20:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_logon_history#13",
+            "agent": "Investigator-Agent",
+            "name": "get_logon_history",
+            "args": {
+              "around": "2026-10-07T13:25:00Z",
+              "end": "2026-10-07T13:30:00Z",
+              "host": "IT-WS-01",
+              "start": "2026-10-07T13:20:00Z",
+              "user": "felix.w"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:score_anomaly#14",
+            "agent": "Investigator-Agent",
+            "name": "score_anomaly",
+            "args": {
+              "event_ids": [
+                "evt_008227",
+                "evt_008225"
+              ]
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 2,
+            "source": "llm",
+            "defaulted_window": false
+          }
+        ],
+        "Reviewer-Agent": [
+          {
+            "ref": "tool:get_network_connections#15",
+            "agent": "Reviewer-Agent",
+            "name": "get_network_connections",
+            "args": {
+              "end": "2026-10-07T23:59:59Z",
+              "host": "IT-WS-01",
+              "process_name": "powershell.exe",
+              "start": "2026-10-07T00:00:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_persistence_events#16",
+            "agent": "Reviewer-Agent",
+            "name": "get_persistence_events",
+            "args": {
+              "end": "2026-10-07T23:59:59Z",
+              "host": "IT-WS-01",
+              "start": "2026-10-07T00:00:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:get_network_connections#17",
+            "agent": "Reviewer-Agent",
+            "name": "get_network_connections",
+            "args": {
+              "end": "2026-10-07T14:00:00Z",
+              "host": "IT-WS-01",
+              "start": "2026-10-07T13:00:00Z"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 3,
+            "source": "llm",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#18",
+            "agent": "Reviewer-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "13.107.138.10",
+              "type": "ip"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          },
+          {
+            "ref": "tool:check_reputation#19",
+            "agent": "Reviewer-Agent",
+            "name": "check_reputation",
+            "args": {
+              "indicator": "contoso-my.sharepoint.com",
+              "type": "domain"
+            },
+            "ok": true,
+            "error": null,
+            "event_ids": 0,
+            "source": "intel_rule",
+            "defaulted_window": false
+          }
+        ]
+      },
+      "coverage_nudges": [
+        "first_checks"
+      ],
+      "reopened": 0,
+      "findings": [
+        {
+          "id": "F1",
+          "claim": "The process powershell.exe (pid 34120) was started by AdminToolkit.exe (pid 9696) with an encoded command that decodes to a temp‑file cleanup and DNS cache clear script.",
+          "kind": "observation",
+          "citations": [
+            "evt_008227"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F2",
+          "claim": "AdminToolkit.exe (pid 9696) was launched by explorer.exe (pid 6892) as part of a scheduled task named \"Weekly workstation maintenance\".",
+          "kind": "observation",
+          "citations": [
+            "evt_008225"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F3",
+          "claim": "The decoded PowerShell script wrote a log entry to C:\\ProgramData\\Northbeam\\maint.log at 13:26:06.",
+          "kind": "observation",
+          "citations": [
+            "evt_008229"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F4",
+          "claim": "No outbound network connections were initiated by the PowerShell process during the 13:20–13:30 window.",
+          "kind": "absence",
+          "citations": [
+            "tool:get_network_connections#11"
+          ],
+          "status": "confirmed",
+          "dispute_reason": null,
+          "withheld_by": []
+        },
+        {
+          "id": "F5",
+          "claim": "No persistence mechanisms (registry keys, scheduled tasks, services) were created or modified by the PowerShell process.",
+          "kind": "absence",
+          "citations": [
+            "tool:get_persistence_events#12"
+          ],
+          "status": "disputed",
+          "dispute_reason": "absence claim not re-verified by a reviewer tool call",
+          "withheld_by": []
+        },
+        {
+          "id": "F6",
+          "claim": "No additional logon events for user felix.w occurred around the time of the PowerShell execution.",
+          "kind": "absence",
+          "citations": [
+            "tool:get_logon_history#13"
+          ],
+          "status": "disputed",
+          "dispute_reason": "absence claim not re-verified by a reviewer tool call",
+          "withheld_by": []
+        }
+      ],
+      "reportable_findings": [
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ],
+      "findings_dropped": 2,
+      "citations_removed": 2,
+      "review": {
+        "confirmed": [
+          "F1",
+          "F2",
+          "F3",
+          "F4"
+        ],
+        "disputed": [
+          {
+            "finding": "F5",
+            "reason": "absence claim not re-verified by a reviewer tool call"
+          },
+          {
+            "finding": "F6",
+            "reason": "absence claim not re-verified by a reviewer tool call"
+          }
+        ],
+        "unreviewed": [],
+        "reopen_requested": false,
+        "reason": "All findings are supported by the provided evidence.",
+        "passes": 1
+      },
+      "injection_flags": [],
+      "tokens": {
+        "llm_calls": 16,
+        "rejected_calls": 0,
+        "input_tokens": 46799,
+        "cached_tokens": 0,
+        "output_tokens": 4876,
+        "total_tokens": 51675,
+        "billed_tokens": 51675
+      },
+      "tokens_per_agent": {
+        "Sentinel-Triage": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 859,
+          "cached_tokens": 0,
+          "output_tokens": 124,
+          "billed_tokens": 983
+        },
+        "CyberIntel-Agent": {
+          "calls": 2,
+          "rejected_calls": 0,
+          "input_tokens": 3132,
+          "cached_tokens": 0,
+          "output_tokens": 655,
+          "billed_tokens": 3787
+        },
+        "Investigator-Agent": {
+          "calls": 9,
+          "rejected_calls": 0,
+          "input_tokens": 32627,
+          "cached_tokens": 0,
+          "output_tokens": 1377,
+          "billed_tokens": 34004
+        },
+        "Reviewer-Agent": {
+          "calls": 4,
+          "rejected_calls": 0,
+          "input_tokens": 10181,
+          "cached_tokens": 0,
+          "output_tokens": 2720,
+          "billed_tokens": 12901
+        }
+      },
+      "tokens_per_node": {
+        "triage": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 859,
+          "cached_tokens": 0,
+          "output_tokens": 124,
+          "billed_tokens": 983,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "intel": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 1844,
+          "cached_tokens": 0,
+          "output_tokens": 428,
+          "billed_tokens": 2272,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "intel_brief": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 1288,
+          "cached_tokens": 0,
+          "output_tokens": 227,
+          "billed_tokens": 1515,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "plan": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 1565,
+          "cached_tokens": 0,
+          "output_tokens": 160,
+          "billed_tokens": 1725,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "investigate": {
+          "calls": 7,
+          "rejected_calls": 0,
+          "input_tokens": 27398,
+          "cached_tokens": 0,
+          "output_tokens": 776,
+          "billed_tokens": 28174,
+          "effort": "medium",
+          "model": "openai/gpt-oss-20b"
+        },
+        "summarize_findings": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 3664,
+          "cached_tokens": 0,
+          "output_tokens": 441,
+          "billed_tokens": 4105,
+          "effort": "low",
+          "model": "openai/gpt-oss-20b"
+        },
+        "review": {
+          "calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 6954,
+          "cached_tokens": 0,
+          "output_tokens": 2010,
+          "billed_tokens": 8964,
+          "effort": "medium",
+          "model": "openai/gpt-oss-20b"
+        },
+        "review_verdict": {
+          "calls": 1,
+          "rejected_calls": 0,
+          "input_tokens": 3227,
+          "cached_tokens": 0,
+          "output_tokens": 710,
+          "billed_tokens": 3937,
+          "effort": "medium",
+          "model": "openai/gpt-oss-20b"
+        }
+      },
+      "tokens_per_model": {
+        "openai/gpt-oss-20b": {
+          "calls": 16,
+          "rejected_calls": 0,
+          "input_tokens": 46799,
+          "cached_tokens": 0,
+          "output_tokens": 4876,
+          "billed_tokens": 51675
+        }
+      },
+      "llm_calls": [
+        {
+          "node": "triage",
+          "input_tokens": 859,
+          "output_tokens": 124,
+          "seconds": 0.7350000000005821,
+          "retries": 1,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Sentinel-Triage"
+        },
+        {
+          "node": "intel",
+          "input_tokens": 1844,
+          "output_tokens": 428,
+          "seconds": 1.062999999994645,
+          "retries": 1,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "CyberIntel-Agent"
+        },
+        {
+          "node": "intel_brief",
+          "input_tokens": 1288,
+          "output_tokens": 227,
+          "seconds": 0.9850000000005821,
+          "retries": 1,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "CyberIntel-Agent"
+        },
+        {
+          "node": "plan",
+          "input_tokens": 1565,
+          "output_tokens": 160,
+          "seconds": 1.1409999999959837,
+          "retries": 1,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3066,
+          "output_tokens": 110,
+          "seconds": 0.9839999999967404,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4044,
+          "output_tokens": 83,
+          "seconds": 1.0319999999992433,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4261,
+          "output_tokens": 119,
+          "seconds": 0.8589999999967404,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3808,
+          "output_tokens": 101,
+          "seconds": 1.2810000000026776,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3870,
+          "output_tokens": 231,
+          "seconds": 1.1719999999986612,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4054,
+          "output_tokens": 52,
+          "seconds": 1.125,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4295,
+          "output_tokens": 80,
+          "seconds": 1.1880000000019209,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "summarize_findings",
+          "input_tokens": 3664,
+          "output_tokens": 441,
+          "seconds": 1.2030000000013388,
+          "retries": 1,
+          "effort": "low",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Investigator-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2220,
+          "output_tokens": 499,
+          "seconds": 1.1569999999992433,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2320,
+          "output_tokens": 411,
+          "seconds": 1.2660000000032596,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review",
+          "input_tokens": 2414,
+          "output_tokens": 1100,
+          "seconds": 1.7660000000032596,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        },
+        {
+          "node": "review_verdict",
+          "input_tokens": 3227,
+          "output_tokens": 710,
+          "seconds": 1.610000000000582,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0,
+          "model": "openai/gpt-oss-20b",
+          "rejected": false,
+          "agent": "Reviewer-Agent"
+        }
+      ]
+    }
+  ]
+}

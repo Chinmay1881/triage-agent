@@ -1,0 +1,832 @@
+{
+  "description": "single-agent Phase 3 baseline, before the Phase 3b restructure",
+  "date": "2026-11-06",
+  "code_commit": "fb8e798",
+  "model": "openai/gpt-oss-120b",
+  "reasoning_effort": {
+    "plan": "low",
+    "investigate": "medium",
+    "summarize_findings": "low",
+    "critic": "medium"
+  },
+  "runs": [
+    {
+      "scenario": "s01",
+      "alert_id": "alt_0001",
+      "stop_reason": "budget",
+      "timed_out": false,
+      "duration_s": 520.3,
+      "tool_budget": 12,
+      "tool_calls_used": 12,
+      "tool_calls": [
+        {
+          "name": "search_process_events",
+          "args": {
+            "end": "2026-10-06T10:30:00Z",
+            "host": "FIN-WS-02",
+            "name": "msupdate.exe",
+            "start": "2026-10-06T09:55:00Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 1
+        },
+        {
+          "name": "get_network_connections",
+          "args": {
+            "end": "2026-10-06T10:30:00Z",
+            "host": "FIN-WS-02",
+            "process_name": "powershell.exe",
+            "start": "2026-10-06T09:55:00Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 1
+        },
+        {
+          "name": "check_reputation",
+          "args": {
+            "indicator": "acd149ab7c221ef664ba5d22c23d791ad13b800dc6de841c0bb78fe59f34a047",
+            "type": "hash"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "get_process_tree",
+          "args": {
+            "event_id": "evt_004052"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 4
+        },
+        {
+          "name": "get_persistence_events",
+          "args": {
+            "around": "2026-10-06T09:55:00Z",
+            "end": "2026-10-06T11:00:00Z",
+            "host": "FIN-WS-02",
+            "start": "2026-10-06T09:00:00Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "check_reputation",
+          "args": {
+            "indicator": "invoice-portal.example",
+            "type": "domain"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "score_anomaly",
+          "args": {
+            "event_ids": [
+              "evt_004047",
+              "evt_004049",
+              "evt_004052"
+            ]
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 3
+        },
+        {
+          "name": "lookup_attack_technique",
+          "args": {
+            "technique_id": "T1059.001"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "lookup_attack_technique",
+          "args": {
+            "technique_id": "T1105"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "check_reputation",
+          "args": {
+            "indicator": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+            "type": "hash"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "get_dns_queries",
+          "args": {
+            "end": "2026-10-06T10:30:00Z",
+            "host": "FIN-WS-02",
+            "process_name": "powershell.exe",
+            "start": "2026-10-06T09:55:00Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 1
+        },
+        {
+          "name": "get_process_tree",
+          "args": {
+            "event_id": "evt_004047"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 6
+        }
+      ],
+      "coverage_nudges": [
+        "first_checks"
+      ],
+      "critic_reopened": 1,
+      "findings": [],
+      "findings_dropped": 0,
+      "injection_flags": [],
+      "tokens": {
+        "llm_calls": 17,
+        "input_tokens": 60419,
+        "cached_tokens": 5888,
+        "output_tokens": 4534,
+        "total_tokens": 64953,
+        "billed_tokens": 59065
+      },
+      "tokens_per_node": {
+        "plan": {
+          "effort": "low",
+          "calls": 1,
+          "input_tokens": 912,
+          "cached_tokens": 0,
+          "output_tokens": 393
+        },
+        "investigate": {
+          "effort": "medium",
+          "calls": 14,
+          "input_tokens": 56146,
+          "cached_tokens": 5888,
+          "output_tokens": 2294
+        },
+        "critic": {
+          "effort": "medium",
+          "calls": 2,
+          "input_tokens": 3361,
+          "cached_tokens": 0,
+          "output_tokens": 1847
+        }
+      },
+      "llm_calls": [
+        {
+          "node": "plan",
+          "input_tokens": 912,
+          "output_tokens": 393,
+          "seconds": 1.5780000000013388,
+          "retries": 0,
+          "effort": "low",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 2899,
+          "output_tokens": 140,
+          "seconds": 1.0469999999986612,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3116,
+          "output_tokens": 101,
+          "seconds": 0.7350000000005821,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3311,
+          "output_tokens": 161,
+          "seconds": 1.0469999999986612,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3398,
+          "output_tokens": 190,
+          "seconds": 1.0470000000059372,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4151,
+          "output_tokens": 203,
+          "seconds": 0.9689999999973224,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 3072
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4210,
+          "output_tokens": 326,
+          "seconds": 1.1089999999967404,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3747,
+          "output_tokens": 257,
+          "seconds": 1.4219999999986612,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4066,
+          "output_tokens": 458,
+          "seconds": 1.6719999999986612,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4334,
+          "output_tokens": 55,
+          "seconds": 0.9369999999980791,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4443,
+          "output_tokens": 37,
+          "seconds": 0.6719999999986612,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4348,
+          "output_tokens": 108,
+          "seconds": 0.9530000000013388,
+          "retries": 0,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "critic",
+          "input_tokens": 1611,
+          "output_tokens": 699,
+          "seconds": 1.875,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4573,
+          "output_tokens": 120,
+          "seconds": 0.8899999999994179,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 2816
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4699,
+          "output_tokens": 94,
+          "seconds": 0.875,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4851,
+          "output_tokens": 44,
+          "seconds": 0.6870000000053551,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "critic",
+          "input_tokens": 1750,
+          "output_tokens": 1148,
+          "seconds": 3.0310000000026776,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        }
+      ]
+    },
+    {
+      "scenario": "s08",
+      "alert_id": "alt_0006",
+      "stop_reason": "budget",
+      "timed_out": false,
+      "duration_s": 438.1,
+      "tool_budget": 12,
+      "tool_calls_used": 12,
+      "tool_calls": [
+        {
+          "name": "search_process_events",
+          "args": {
+            "end": "2026-10-07T14:30:00Z",
+            "host": "IT-WS-01",
+            "name": "AdminToolkit.exe",
+            "start": "2026-10-06T13:25:00Z"
+          },
+          "ok": false,
+          "error": "invalid arguments: time window is 25 h; the maximum is 24 h",
+          "event_ids": 0
+        },
+        {
+          "name": "search_process_events",
+          "args": {
+            "end": "2026-10-07T13:30:00Z",
+            "host": "IT-WS-01",
+            "name": "AdminToolkit.exe",
+            "start": "2026-10-06T13:30:00Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 1
+        },
+        {
+          "name": "get_process_tree",
+          "args": {
+            "event_id": "evt_008227"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 5
+        },
+        {
+          "name": "check_reputation",
+          "args": {
+            "indicator": "4632c077f61d2eccf9502b552a3e4b47918b77ef52faa49a97cb54e9fcbcefe7",
+            "type": "hash"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "check_reputation",
+          "args": {
+            "indicator": "fd59c2d5dc2cb8381f2d78cc3007dd231a951696f50a64ae3a6f2eec38cbaf6d",
+            "type": "hash"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "get_process_tree",
+          "args": {
+            "host": "IT-WS-01",
+            "pid": 34120,
+            "ts": "2026-10-07T13:25:22Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 5
+        },
+        {
+          "name": "get_logon_history",
+          "args": {
+            "around": "2026-10-07T13:25:00Z",
+            "end": "2026-10-08T00:00:00Z",
+            "start": "2026-10-06T00:00:00Z",
+            "user": "felix.w"
+          },
+          "ok": false,
+          "error": "invalid arguments: time window is 48 h; the maximum is 24 h",
+          "event_ids": 0
+        },
+        {
+          "name": "get_logon_history",
+          "args": {
+            "around": "2026-10-07T13:25:00Z",
+            "end": "2026-10-07T13:30:00Z",
+            "start": "2026-10-06T13:25:00Z",
+            "user": "felix.w"
+          },
+          "ok": false,
+          "error": "invalid arguments: time window is 24 h; the maximum is 24 h",
+          "event_ids": 0
+        },
+        {
+          "name": "get_logon_history",
+          "args": {
+            "end": "2026-10-07T13:30:00Z",
+            "start": "2026-10-06T13:31:00Z",
+            "user": "felix.w"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 5
+        },
+        {
+          "name": "get_process_tree",
+          "args": {
+            "host": "IT-WS-01",
+            "pid": 9696,
+            "ts": "2026-10-07T13:25:22Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 4
+        },
+        {
+          "name": "search_attack_techniques",
+          "args": {
+            "keyword": "Clear Windows Event Logs"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        },
+        {
+          "name": "get_network_connections",
+          "args": {
+            "around": "2026-10-07T13:25:22Z",
+            "end": "2026-10-07T13:30:00Z",
+            "host": "IT-WS-01",
+            "process_name": "powershell.exe",
+            "start": "2026-10-07T13:20:00Z"
+          },
+          "ok": true,
+          "error": null,
+          "event_ids": 0
+        }
+      ],
+      "coverage_nudges": [
+        "first_checks"
+      ],
+      "critic_reopened": 1,
+      "findings": [
+        {
+          "claim": "AdminToolkit.exe was started by explorer.exe as part of a scheduled \"Weekly workstation maintenance\" task",
+          "event_ids": [
+            "evt_008225"
+          ],
+          "tool": "search_process_events",
+          "withheld_by": []
+        },
+        {
+          "claim": "AdminToolkit.exe is signed by Northbeam Software Ltd and has a known‑good reputation",
+          "event_ids": [
+            "evt_008225"
+          ],
+          "tool": "search_process_events",
+          "withheld_by": []
+        },
+        {
+          "claim": "powershell.exe was launched by AdminToolkit.exe with an encoded command",
+          "event_ids": [
+            "evt_008227"
+          ],
+          "tool": "ingest",
+          "withheld_by": []
+        },
+        {
+          "claim": "powershell.exe binary is signed by Microsoft and has a known‑good reputation",
+          "event_ids": [
+            "evt_008227"
+          ],
+          "tool": "ingest",
+          "withheld_by": []
+        },
+        {
+          "claim": "The decoded PowerShell command writes a timestamped entry to C:\\ProgramData\\Northbeam\\maint.log",
+          "event_ids": [
+            "evt_008229"
+          ],
+          "tool": "get_process_tree",
+          "withheld_by": []
+        },
+        {
+          "claim": "The PowerShell command deletes files older than 14 days from the user's TEMP directory",
+          "event_ids": [
+            "evt_008227"
+          ],
+          "tool": "ingest",
+          "withheld_by": []
+        },
+        {
+          "claim": "The PowerShell command clears the DNS client cache",
+          "event_ids": [
+            "evt_008227"
+          ],
+          "tool": "ingest",
+          "withheld_by": []
+        },
+        {
+          "claim": "User felix.w logged on interactively on the workstation at 08:41 on the day of the alert",
+          "event_ids": [
+            "evt_006807"
+          ],
+          "tool": "get_logon_history",
+          "withheld_by": []
+        },
+        {
+          "claim": "User felix.w performed a remote‑interactive logon to a backup server shortly before the alert",
+          "event_ids": [
+            "evt_008222"
+          ],
+          "tool": "get_logon_history",
+          "withheld_by": []
+        },
+        {
+          "claim": "The process ancestry (winlogon → userinit → explorer → AdminToolkit → powershell) follows the normal Windows logon chain",
+          "event_ids": [
+            "evt_006809",
+            "evt_006810",
+            "evt_008225",
+            "evt_008227"
+          ],
+          "tool": "get_process_tree",
+          "withheld_by": []
+        },
+        {
+          "claim": "No additional instances of AdminToolkit.exe were observed on the host within the 24‑hour window",
+          "event_ids": [
+            "evt_008225"
+          ],
+          "tool": "search_process_events",
+          "withheld_by": []
+        },
+        {
+          "claim": "The activity matches a known maintenance pattern (log file update, temporary file cleanup, DNS cache clear)",
+          "event_ids": [
+            "evt_008227",
+            "evt_008229"
+          ],
+          "tool": "ingest",
+          "withheld_by": []
+        },
+        {
+          "claim": "[withheld: matched injection pattern]",
+          "event_ids": [
+            "evt_008227"
+          ],
+          "tool": "ingest",
+          "withheld_by": [
+            "classifier"
+          ]
+        },
+        {
+          "claim": "[withheld: matched injection pattern]",
+          "event_ids": [
+            "evt_008227",
+            "evt_008225"
+          ],
+          "tool": "ingest",
+          "withheld_by": [
+            "classifier"
+          ]
+        },
+        {
+          "claim": "The maintenance script was executed by an administrator account (felix.w is an admin user)",
+          "event_ids": [
+            "evt_008227"
+          ],
+          "tool": "ingest",
+          "withheld_by": []
+        }
+      ],
+      "findings_dropped": 0,
+      "injection_flags": [
+        {
+          "event_id": null,
+          "method": "classifier"
+        }
+      ],
+      "tokens": {
+        "llm_calls": 18,
+        "input_tokens": 72834,
+        "cached_tokens": 20224,
+        "output_tokens": 5277,
+        "total_tokens": 78111,
+        "billed_tokens": 57887
+      },
+      "tokens_per_node": {
+        "plan": {
+          "effort": "low",
+          "calls": 1,
+          "input_tokens": 931,
+          "cached_tokens": 0,
+          "output_tokens": 362
+        },
+        "investigate": {
+          "effort": "medium",
+          "calls": 14,
+          "input_tokens": 61981,
+          "cached_tokens": 20224,
+          "output_tokens": 2797
+        },
+        "summarize_findings": {
+          "effort": "low",
+          "calls": 1,
+          "input_tokens": 5286,
+          "cached_tokens": 0,
+          "output_tokens": 757
+        },
+        "critic": {
+          "effort": "medium",
+          "calls": 2,
+          "input_tokens": 4636,
+          "cached_tokens": 0,
+          "output_tokens": 1361
+        }
+      },
+      "llm_calls": [
+        {
+          "node": "plan",
+          "input_tokens": 931,
+          "output_tokens": 362,
+          "seconds": 1.6880000000019209,
+          "retries": 2,
+          "effort": "low",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 2928,
+          "output_tokens": 114,
+          "seconds": 0.875,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3029,
+          "output_tokens": 125,
+          "seconds": 0.6089999999967404,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3259,
+          "output_tokens": 67,
+          "seconds": 0.7659999999959837,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4103,
+          "output_tokens": 182,
+          "seconds": 1.25,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4201,
+          "output_tokens": 175,
+          "seconds": 2.139999999999418,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 2816
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 3789,
+          "output_tokens": 145,
+          "seconds": 1.1880000000019209,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4597,
+          "output_tokens": 180,
+          "seconds": 1.3289999999979045,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 2048
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4644,
+          "output_tokens": 119,
+          "seconds": 1.0939999999973224,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 2048
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4184,
+          "output_tokens": 162,
+          "seconds": 0.8439999999973224,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 3072
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 4609,
+          "output_tokens": 205,
+          "seconds": 1.2969999999986612,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 5449,
+          "output_tokens": 505,
+          "seconds": 1.4530000000013388,
+          "retries": 2,
+          "effort": "medium",
+          "cached_tokens": 3072
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 5743,
+          "output_tokens": 224,
+          "seconds": 1.0159999999959837,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 4096
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 5628,
+          "output_tokens": 111,
+          "seconds": 1.014999999999418,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 3072
+        },
+        {
+          "node": "summarize_findings",
+          "input_tokens": 5286,
+          "output_tokens": 757,
+          "seconds": 2.311999999998079,
+          "retries": 2,
+          "effort": "low",
+          "cached_tokens": 0
+        },
+        {
+          "node": "critic",
+          "input_tokens": 2280,
+          "output_tokens": 789,
+          "seconds": 2.3910000000032596,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "investigate",
+          "input_tokens": 5818,
+          "output_tokens": 483,
+          "seconds": 1.6719999999986612,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        },
+        {
+          "node": "critic",
+          "input_tokens": 2356,
+          "output_tokens": 572,
+          "seconds": 1.9689999999973224,
+          "retries": 1,
+          "effort": "medium",
+          "cached_tokens": 0
+        }
+      ]
+    }
+  ]
+}

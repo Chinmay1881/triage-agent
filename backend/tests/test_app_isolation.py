@@ -142,3 +142,37 @@ def test_tools_never_touch_filesystem_or_scenarios(path: Path) -> None:
 )
 def test_detects_filesystem_access(source: str) -> None:
     assert filesystem_access(source)
+
+
+BLOCKLIST_NAME = "cli_blocklist"
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted((APP / "agent").rglob("*.py")) + TOOL_FILES,
+    ids=lambda p: p.relative_to(APP).as_posix(),
+)
+def test_agent_and_tools_never_read_the_cli_blocklist(path: Path) -> None:
+    # The blocklist names the injection scenario's alert. Only app/cli.py may know it; the
+    # agent must investigate every alert without being told which one is the trap.
+    assert BLOCKLIST_NAME not in path.read_text(encoding="utf-8")
+
+
+def test_only_the_blocklist_module_names_the_file() -> None:
+    users = [p for p in APP.rglob("*.py") if BLOCKLIST_NAME in p.read_text(encoding="utf-8")]
+    assert users == [APP / "blocklist.py"]
+
+
+def test_only_the_cli_and_the_api_use_the_blocklist_module() -> None:
+    def imports_it(path: Path) -> bool:
+        names = []
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names += [f"{node.module}.{a.name}" for a in node.names]
+                names.append(node.module)
+            elif isinstance(node, ast.Import):
+                names += [a.name for a in node.names]
+        return "app.blocklist" in names
+
+    users = sorted(p.relative_to(APP).as_posix() for p in APP.rglob("*.py") if imports_it(p))
+    assert users == ["api/routes.py", "cli.py"]

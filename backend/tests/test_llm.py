@@ -1,0 +1,399 @@
+"""app/llm.py without any network: pacing, 429 retries, structured-output retries, the mock."""
+
+from typing import Any
+
+import groq
+import httpx
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+from pydantic import BaseModel
+
+from app.config import get_settings
+from app.llm import (
+    GroqLLM,
+    InvalidToolCallError,
+    LLMError,
+    MockLLM,
+    TokenBucket,
+    get_model,
+    output_budget,
+)
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def rate_limited(headers: dict[str, str]) -> groq.RateLimitError:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(429, headers=headers, request=request)
+    return groq.RateLimitError("rate limited", response=response, body=None)
+
+
+class FakeRunnable:
+    def __init__(self, outcomes: list[Any]) -> None:
+        self.outcomes = outcomes
+        self.calls = 0
+
+    async def ainvoke(self, messages: list[Any]) -> Any:
+        outcome = self.outcomes[min(self.calls, len(self.outcomes) - 1)]
+        self.calls += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+class FakeChat:
+    def __init__(self, runnable: FakeRunnable) -> None:
+        self.runnable = runnable
+        self.max_tokens: list[int] = []
+
+    def model_copy(self, update: dict[str, Any]) -> "FakeChat":
+        self.max_tokens.append(update["max_tokens"])
+        return self
+
+    def bind_tools(self, tools: list[dict[str, Any]]) -> FakeRunnable:
+        return self.runnable
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> FakeRunnable:
+        return self.runnable
+
+
+def reply(tokens_in: int = 100, tokens_out: int = 20) -> AIMessage:
+    usage = {"input_tokens": tokens_in, "output_tokens": tokens_out, "total_tokens": 0}
+    return AIMessage(content="ok", usage_metadata=usage)
+
+
+def groq_llm(
+    runnable: FakeRunnable,
+    clock: FakeClock,
+    efforts: dict[str, str] | None = None,
+    built: list[str | None] | None = None,
+    chats: list[FakeChat] | None = None,
+    **settings: Any,
+) -> GroqLLM:
+    s = get_settings().model_copy(update=settings)
+
+    def chat_for(model: str, effort: str | None) -> FakeChat:
+        if built is not None:
+            built.append(effort)
+        chat = FakeChat(runnable)
+        if chats is not None:
+            chats.append(chat)
+        return chat
+
+    return GroqLLM(chat_for, s, efforts, clock=clock, sleep=clock.sleep)  # type: ignore[arg-type]
+
+
+async def test_reasoning_effort_is_per_node_and_recorded() -> None:
+    built: list[str | None] = []
+    efforts = {"plan": "low", "investigate": "medium"}
+    llm = groq_llm(FakeRunnable([reply()]), FakeClock(), efforts, built)
+
+    await llm.invoke_tools("investigate", [HumanMessage("a")], [])
+    await llm.invoke_tools("investigate", [HumanMessage("b")], [])
+    await llm.invoke_tools("plan", [HumanMessage("c")], [])
+
+    # One chat model per effort, built once and reused.
+    assert built == ["medium", "low"]
+    by_node = llm.usage.by_node()
+    assert by_node["investigate"]["effort"] == "medium" and by_node["investigate"]["calls"] == 2
+    assert by_node["plan"]["effort"] == "low"
+
+
+def test_default_efforts_think_harder_where_checks_are_chosen() -> None:
+    efforts = get_settings().llm_reasoning_effort
+
+    assert efforts == {
+        "triage": "low",
+        "intel": "low",
+        "intel_brief": "low",
+        "plan": "low",
+        "investigate": "medium",
+        "summarize_findings": "low",
+        "review": "medium",
+        "review_verdict": "medium",
+        "map_attack": "low",
+        "assess": "medium",
+        "recommend": "low",
+        "report_summary": "low",
+    }
+
+
+def test_assess_is_on_the_main_model_and_the_other_closing_steps_are_not() -> None:
+    settings = get_settings().model_copy(update={"llm_model": "big-model"})
+
+    assert settings.model_for("assess") == "big-model"
+    for node in ("map_attack", "recommend", "report_summary"):
+        assert settings.model_for(node) == "openai/gpt-oss-20b"
+
+
+def test_each_agent_has_its_model_and_each_model_its_bucket() -> None:
+    llm = groq_llm(FakeRunnable([reply()]), FakeClock(), llm_model="big-model")
+
+    assert llm._settings.model_for("triage") == "openai/gpt-oss-20b"
+    assert llm._settings.model_for("intel_brief") == "openai/gpt-oss-20b"
+    assert llm._settings.model_for("investigate") == "big-model"
+    assert llm._settings.model_for("review_verdict") == "big-model"
+    assert llm.bucket_for("plan") is llm.bucket_for("review")
+    assert llm.bucket_for("plan") is not llm.bucket_for("triage")
+
+
+async def test_tokens_are_reported_per_agent_and_model() -> None:
+    llm = groq_llm(FakeRunnable([reply(100, 20)]), FakeClock(), llm_model="big-model")
+
+    await llm.invoke_tools("triage", [HumanMessage("a")], [])
+    await llm.invoke_tools("investigate", [HumanMessage("b")], [])
+    await llm.invoke_tools("review", [HumanMessage("c")], [])
+
+    by_agent, by_model = llm.usage.by_agent(), llm.usage.by_model()
+    assert set(by_agent) == {"Sentinel-Triage", "Investigator-Agent", "Reviewer-Agent"}
+    assert by_model["big-model"]["calls"] == 2 and by_model["big-model"]["billed_tokens"] == 240
+    assert by_model["openai/gpt-oss-20b"]["calls"] == 1
+    assert llm.usage.models_by_agent() == {
+        "Sentinel-Triage": ["openai/gpt-oss-20b"],
+        "Investigator-Agent": ["big-model"],
+        "Reviewer-Agent": ["big-model"],
+    }
+
+
+async def test_bucket_waits_only_for_the_missing_tokens() -> None:
+    clock = FakeClock()
+    bucket = TokenBucket(6000, clock, clock.sleep)  # refills 100 tokens a second
+    bucket.record(5000)
+
+    waited = await bucket.wait_for(4000)
+
+    assert waited == pytest.approx(30.0)
+    assert bucket.available() == pytest.approx(4000)
+
+
+async def test_bucket_refills_over_time_and_caps_at_the_limit() -> None:
+    clock = FakeClock()
+    bucket = TokenBucket(6000, clock, clock.sleep)
+    bucket.record(3000)
+    clock.now = 600.0
+
+    assert await bucket.wait_for(2000) == 0.0
+    assert bucket.available() == 6000
+
+
+async def test_bucket_never_waits_for_more_than_the_whole_limit() -> None:
+    clock = FakeClock()
+    bucket = TokenBucket(6000, clock, clock.sleep)
+    bucket.record(6000)
+
+    assert await bucket.wait_for(50_000) == pytest.approx(60.0)
+
+
+async def test_429_waits_for_retry_after_then_succeeds() -> None:
+    clock = FakeClock()
+    runnable = FakeRunnable([rate_limited({"retry-after": "7"}), rate_limited({}), reply()])
+    llm = groq_llm(runnable, clock)
+
+    answer = await llm.invoke_tools("investigate", [HumanMessage("hi")], [])
+
+    assert answer.content == "ok"
+    # 7 s from retry-after, then exponential backoff (2**1) when the header is missing.
+    assert clock.sleeps == [7.0, 2.0]
+    (record,) = llm.usage.calls
+    assert record.retries == 2 and record.input_tokens == 100 and record.output_tokens == 20
+
+
+async def test_429_gives_up_after_max_retries() -> None:
+    clock = FakeClock()
+    llm = groq_llm(FakeRunnable([rate_limited({"retry-after": "1"})]), clock, llm_max_retries=2)
+
+    with pytest.raises(LLMError, match="rate limited"):
+        await llm.invoke_tools("investigate", [HumanMessage("hi")], [])
+    assert clock.sleeps == [1.0, 1.0]
+
+
+class Answer(BaseModel):
+    value: int
+
+
+async def test_structured_output_retried_once_with_parse_error() -> None:
+    bad = {"raw": reply(), "parsed": None, "parsing_error": ValueError("not json")}
+    good = {"raw": reply(), "parsed": Answer(value=3), "parsing_error": None}
+    runnable = FakeRunnable([bad, good])
+    llm = groq_llm(runnable, FakeClock())
+
+    answer = await llm.invoke_structured("plan", [HumanMessage("hi")], Answer)
+
+    assert answer == Answer(value=3)
+    assert runnable.calls == 2 and len(llm.usage.calls) == 2
+
+
+async def test_structured_output_fails_cleanly_after_second_bad_parse() -> None:
+    bad = {"raw": reply(), "parsed": None, "parsing_error": ValueError("not json")}
+    llm = groq_llm(FakeRunnable([bad]), FakeClock())
+
+    with pytest.raises(LLMError, match="did not match Answer twice"):
+        await llm.invoke_structured("plan", [HumanMessage("hi")], Answer)
+
+
+async def test_usage_totals_add_up() -> None:
+    llm = groq_llm(FakeRunnable([reply(100, 20), reply(50, 5)]), FakeClock())
+    await llm.invoke_tools("investigate", [HumanMessage("a")], [])
+    await llm.invoke_tools("investigate", [HumanMessage("b")], [])
+
+    assert llm.usage.totals() == {
+        "llm_calls": 2,
+        "rejected_calls": 0,
+        "input_tokens": 150,
+        "cached_tokens": 0,
+        "output_tokens": 25,
+        "total_tokens": 175,
+        "billed_tokens": 175,
+    }
+
+
+async def test_cached_tokens_are_logged_and_not_billed_for_pacing() -> None:
+    usage = {
+        "input_tokens": 4000,
+        "output_tokens": 100,
+        "total_tokens": 4100,
+        "input_token_details": {"cache_read": 3000},
+    }
+    llm = groq_llm(FakeRunnable([AIMessage("ok", usage_metadata=usage)]), FakeClock())
+
+    await llm.invoke_tools("investigate", [HumanMessage("x")], [])
+
+    (record,) = llm.usage.calls
+    assert record.cached_tokens == 3000 and record.billed_tokens == 1100
+    # Groq: cached tokens don't count towards rate limits, so pacing only spends 1,100.
+    assert llm.bucket_for("investigate").available() == pytest.approx(8000 - 1100)
+
+
+async def test_mock_repeats_last_answer_and_records_prompts() -> None:
+    call = {"name": "get_host_info", "args": {"host": "DC-01"}, "id": "x", "type": "tool_call"}
+    mock = MockLLM({"investigate": [AIMessage("", tool_calls=[call])]})
+
+    first = await mock.invoke_tools("investigate", [HumanMessage("1")], [])
+    second = await mock.invoke_tools("investigate", [HumanMessage("2")], [])
+
+    assert first.tool_calls[0]["name"] == second.tool_calls[0]["name"] == "get_host_info"
+    assert first.tool_calls[0]["id"] != second.tool_calls[0]["id"]
+    assert len(mock.prompts["investigate"]) == 2
+
+
+async def test_mock_without_script_for_node_is_an_error() -> None:
+    with pytest.raises(LLMError, match="no answer scripted"):
+        await MockLLM({}).invoke_structured("critic", [HumanMessage("x")], Answer)
+
+
+def test_get_model_refuses_mock_mode() -> None:
+    with pytest.raises(LLMError, match="MockLLM"):
+        get_model(get_settings().model_copy(update={"llm_mode": "mock"}))
+
+
+def bad_request(code: str = "tool_use_failed") -> groq.BadRequestError:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    body = {"error": {"code": code, "message": "schema mismatch", "failed_generation": "SECRET"}}
+    return groq.BadRequestError("bad request", response=response, body=body)
+
+
+async def test_rejected_tool_call_raises_with_the_api_reason_only() -> None:
+    runnable = FakeRunnable([bad_request()])
+    llm = groq_llm(runnable, FakeClock())
+
+    with pytest.raises(InvalidToolCallError) as raised:
+        await llm.invoke_tools("investigate", [HumanMessage("x" * 400)], [])
+
+    assert str(raised.value) == "schema mismatch" and "SECRET" not in str(raised.value)
+    # The rejected request's ~100 estimated tokens still count for pacing.
+    assert llm.bucket_for("investigate").available() == pytest.approx(8000 - 100)
+    totals = llm.usage.totals()
+    assert totals["rejected_calls"] == 1 and totals["billed_tokens"] == 100
+
+
+async def test_other_bad_requests_are_plain_llm_errors() -> None:
+    llm = groq_llm(FakeRunnable([bad_request("context_length_exceeded")]), FakeClock())
+
+    with pytest.raises(LLMError, match="context_length_exceeded") as raised:
+        await llm.invoke_tools("investigate", [HumanMessage("hi")], [])
+    assert not isinstance(raised.value, InvalidToolCallError)
+
+
+async def test_strict_schema_rejection_is_retried_once() -> None:
+    good = {"raw": reply(), "parsed": Answer(value=1), "parsing_error": None}
+    runnable = FakeRunnable([bad_request("json_validate_failed"), good])
+    llm = groq_llm(runnable, FakeClock())
+
+    answer = await llm.invoke_structured("summarize_findings", [HumanMessage("x")], Answer)
+
+    assert answer == Answer(value=1) and runnable.calls == 2
+
+
+async def test_rejection_errors_never_carry_failed_generation() -> None:
+    llm = groq_llm(FakeRunnable([bad_request("json_validate_failed")]), FakeClock())
+
+    with pytest.raises(LLMError) as raised:
+        await llm.invoke_structured("critic", [HumanMessage("x")], Answer)
+
+    assert "SECRET" not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+async def test_long_retry_after_fails_fast_with_the_reason() -> None:
+    clock = FakeClock()
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    body = {"error": {"code": "rate_limit_exceeded", "message": "tokens per day (TPD) reached"}}
+    response = httpx.Response(429, headers={"retry-after": "1522"}, request=request)
+    daily = groq.RateLimitError("rate limited", response=response, body=body)
+    llm = groq_llm(FakeRunnable([daily]), clock)
+
+    with pytest.raises(LLMError, match="wait 1522s: tokens per day"):
+        await llm.invoke_tools("investigate", [HumanMessage("hi")], [])
+    assert clock.sleeps == []
+
+
+def test_output_budget_fits_max_tokens_under_the_minute_limit() -> None:
+    assert output_budget(1000, 250_000, 2048) == 2048
+    # 8,000 - 6,000 * 1.1 leaves 1,400 for the answer.
+    assert output_budget(6000, 8000, 2048) == 1400
+    # The reopened summarize_findings that Groq refused: no useful room is left.
+    assert output_budget(7200, 8000, 2048) is None
+
+
+async def test_max_tokens_is_fitted_to_each_request() -> None:
+    chats: list[FakeChat] = []
+    llm = groq_llm(FakeRunnable([reply()]), FakeClock(), chats=chats)
+
+    await llm.invoke_tools("investigate", [HumanMessage("x" * 400)], [])
+    await llm.invoke_tools("investigate", [HumanMessage("x" * 24_000)], [])
+
+    assert chats[0].max_tokens == [2048, 1400]
+
+
+async def test_request_without_room_for_an_answer_is_refused_before_sending() -> None:
+    runnable = FakeRunnable([reply()])
+    llm = groq_llm(runnable, FakeClock())
+
+    with pytest.raises(LLMError, match="leaves no room for an answer"):
+        await llm.invoke_structured("summarize_findings", [HumanMessage("x" * 28_800)], Answer)
+    assert runnable.calls == 0
+
+
+async def test_413_request_too_large_is_a_plain_llm_error() -> None:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(413, request=request)
+    message = "Request too large ... (TPM): Limit 8000, Requested 9250"
+    body = {"error": {"code": "rate_limit_exceeded", "message": message, "failed_generation": "S"}}
+    too_large = groq.APIStatusError("too large", response=response, body=body)
+    llm = groq_llm(FakeRunnable([too_large]), FakeClock())
+
+    with pytest.raises(LLMError, match=r"request too large: .*Requested 9250") as raised:
+        await llm.invoke_structured("summarize_findings", [HumanMessage("x")], Answer)
+    assert raised.value.__cause__ is None

@@ -10,11 +10,13 @@ the anomaly model's training data (scripts/train.py builds the same week in memo
 """
 
 import argparse
+import json
 import sys
 from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+BLOCKLIST = "cli_blocklist.json"
 # Scripts run from the repo root but share the backend's models; make both importable.
 sys.path[:0] = [str(ROOT), str(ROOT / "backend")]
 
@@ -39,8 +41,17 @@ def write_telemetry(dataset: Dataset, out: Path) -> None:
     write_jsonl(out / "alerts.jsonl", dataset.alerts)
 
 
+def write_blocklist(dataset: Dataset, out: Path) -> None:
+    """Alert IDs the dev CLI must refuse: the prompt-injection scenario is run only by the eval
+    harness. Just IDs, no verdict or technique; only app/cli.py reads this file."""
+    blocked = sorted(r.alert.alert_id for r in dataset.scenarios if r.injection)
+    text = json.dumps({"alert_ids": blocked}, indent=2) + "\n"
+    (out / BLOCKLIST).write_text(text, encoding="utf-8", newline="\n")
+
+
 def write_dataset(dataset: Dataset, seed: int, variant: int, out: Path, truth_dir: Path) -> None:
     write_telemetry(dataset, out)
+    write_blocklist(dataset, out)
     truth_dir.mkdir(parents=True, exist_ok=True)
     for result in dataset.scenarios:
         truth = dataset.truth(result, seed, variant)

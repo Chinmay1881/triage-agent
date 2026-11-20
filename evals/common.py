@@ -5,6 +5,7 @@ is rebuilt in memory from the same deterministic build that `python tasks.py see
 """
 
 import json
+import os
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
@@ -25,6 +26,28 @@ def eval_week() -> Dataset:
 
 def scenario_event_ids(ds: Dataset) -> set[str]:
     return {e.event_id for r in ds.scenarios for e in [*r.events, *r.key_events]}
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Every whole line. A last line with no newline is a write that died halfway: it's cut off
+    here, so resuming reruns that run instead of tripping over half a record."""
+    if not path.exists():
+        return []
+    data = path.read_bytes()
+    if data and not data.endswith(b"\n"):
+        data = data[: data.rfind(b"\n") + 1]
+        path.write_bytes(data)
+    return [json.loads(line) for line in data.decode("utf-8").splitlines() if line]
+
+
+def append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    """One whole line in one write, flushed to disk before returning."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = (json.dumps(row, separators=(",", ":")) + "\n").encode("utf-8")
+    with path.open("ab") as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def write_result(name: str, result: dict[str, Any]) -> Path:
